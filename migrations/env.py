@@ -54,6 +54,11 @@ def run_migrations_online() -> None:
         is_pg = connection.dialect.name == "postgresql"
         if is_pg:
             connection.execute(text("SELECT pg_advisory_lock(7453112401)"))
+            # WHY: 取锁的 execute 会 autobegin 一个事务。若不清账，alembic 的
+            # begin_transaction() 会误认为事务已存在而不接管提交，导致迁移 DDL 在
+            # 连接关闭时被回滚、空库不建表（offline 不受影响）。commit 把它清掉，
+            # 让 alembic 自己开事务、迁移后提交。会话级锁不受 COMMIT 影响，仍在。
+            connection.commit()
         try:
             context.configure(connection=connection, target_metadata=target_metadata)
             with context.begin_transaction():
@@ -61,6 +66,7 @@ def run_migrations_online() -> None:
         finally:
             if is_pg:
                 connection.execute(text("SELECT pg_advisory_unlock(7453112401)"))
+                connection.commit()
 
 
 if context.is_offline_mode():

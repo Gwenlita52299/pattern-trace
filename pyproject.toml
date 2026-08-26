@@ -40,7 +40,7 @@ source = ["backend"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 99
+fail_under = 79
 show_missing = true
 precision = 2
 

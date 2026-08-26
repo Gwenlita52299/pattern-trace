@@ -11,6 +11,18 @@ on:
 jobs:
   lint-test-backend:
     runs-on: ubuntu-latest
+    services:
+      # 单测依赖真实 Postgres（BE-42/auth 等用例）；默认 DATABASE_URL 即指向此服务
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: pt
+          POSTGRES_PASSWORD: pt
+          POSTGRES_DB: patterntrace
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pt" --health-interval 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -18,6 +30,8 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --extra dev
+      - name: Migrate database
+        run: DATABASE_URL=postgresql://pt:pt@localhost:5432/patterntrace JWT_SECRET=ci-secret uv run alembic upgrade head
       - name: Lint
         run: uv run ruff check backend/
       - name: OpenAPI codegen (CT-01)
