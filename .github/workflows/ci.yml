@@ -66,7 +66,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start services
         run: |
-          JWT_SECRET=e2e-ci-secret docker compose up --build -d db redis backend
+          JWT_SECRET=e2e-ci-secret \
+          BOOTSTRAP_ADMIN_EMAIL=admin@patterntrace.app \
+          BOOTSTRAP_ADMIN_PASSWORD=AdminPass123! \
+          docker compose up --build -d db redis backend
           sleep 10
       - name: Health checks
         run: |
@@ -81,9 +84,14 @@ jobs:
           done
       - name: Auth flow smoke test
         run: |
-          # 先建号再登录（bootstrap 无此账号；POST /users 幂等冲突则直接用之）
+          # POST /users 需 admin（require_role("admin")）——先以 bootstrap admin 登录建号。
+          # 建号幂等：已存在则 409 冲突，直接复用再登录。
+          ADMIN=$(curl -s http://localhost:8000/api/v1/auth/login \
+            -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+            -d '{"email":"admin@patterntrace.app","password":"AdminPass123!"}' | jq -r '.access_token')
           curl -s -o /dev/null -X POST http://localhost:8000/api/v1/users \
             -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+            -H "Authorization: Bearer $ADMIN" \
             -d '{"email":"demo@patterntrace.app","password":"DemoPass123!","role":"investigator"}'
           TOKEN=$(curl -s http://localhost:8000/api/v1/auth/login \
             -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
