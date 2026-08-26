@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # nightly 性能档（PERF-01/02）：03:00 UTC
+    - cron: "0 3 * * *"
+
+jobs:
+  lint-test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Lint
+        run: uv run ruff check backend/
+      - name: OpenAPI codegen (CT-01)
+        run: |
+          JWT_SECRET=ci-secret uv run python -m scripts.gen_api_types
+          git diff --exit-code -- frontend/types/api.d.ts \
+            tests/unit/__snapshots__/openapi.json \
+            || { echo "::error::OpenAPI drift — run 'python -m scripts.gen_api_types' and commit"; exit 1; }
+      - name: Unit tests (含契约测试 CT-01~03)
+        run: uv run pytest tests/unit --cov=backend --cov-report=term-missing
+      - name: Alembic offline SQL check
+        run: |
+          JWT_SECRET=ci-secret DATABASE_URL=postgresql://ci:ci@localhost/ci \
+            uv run alembic upgrade head --sql > /dev/null
+
+  lint-test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci && npm run type-check
+        working-directory: frontend
+
+  e2e:
+    needs: [lint-test-backend, lint-test-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start services
+        run: |
+          JWT_SECRET=e2e-ci-secret docker compose up --build -d db redis backend
+          sleep 10
+      - name: Health checks
+        run: |
+          curl -f http://localhost:8000/healthz
+          curl -f http://localhost:8000/readyz
+      - name: Contract poll stability (CT-02 over HTTP)
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              http://localhost:8000/api/v1/judgments/00000000-0000-0000-0000-000000000000)
+            [ "$code" = "404" ] || { echo "expected 404 got $code"; exit 1; }
+          done
+      - name: Auth flow smoke test
+        run: |
+          # 先建号再登录（bootstrap 无此账号；POST /users 幂等冲突则直接用之）
+          curl -s -o /dev/null -X POST http://localhost:8000/api/v1/users \
+            -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+            -d '{"email":"demo@patterntrace.app","password":"DemoPass123!","role":"investigator"}'
+          TOKEN=$(curl -s http://localhost:8000/api/v1/auth/login \
+            -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
+            -d '{"email":"demo@patterntrace.app","password":"DemoPass123!"}' | jq -r '.access_token')
+          curl -sf http://localhost:8000/api/v1/cases -H "Authorization: Bearer $TOKEN" \
+            -H 'X-Requested-With: XMLHttpRequest'
+
+  perf-nightly:
+    if: github.event_name == 'schedule'
+    needs: [e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: pt
+          POSTGRES_PASSWORD: pt
+          POSTGRES_DB: patterntrace
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U pt" --health-interval 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - name: PERF-01 report capacity (fixture 档)
+        env:
+          DATABASE_URL: postgresql://pt:pt@localhost:5432/patterntrace
+          JWT_SECRET: perf-nightly-secret
+        run: uv run python tests/performance/perf_phase6.py PERF-01

@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 全局 reset 由 tailwind base（preflight）承担，这里保留项目自有规则 */
+body { font-family: system-ui, -apple-system, sans-serif; }
+
+/* evidence 高亮（FE-05/33）：青色发光样式，由 GraphCanvas 节点按需附加 */
+.pt-highlight {
+  border-color: #06b6d4 !important;
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.45), 0 0 14px rgba(6, 182, 212, 0.65);
+}
+
+/* reactflow 默认暗色适配关闭：画布容器使用浅色主题 */
+.react-flow__attribution { display: none; }

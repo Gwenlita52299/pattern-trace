@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (Next.js)
+node_modules/
+.next/
+out/
+dist/
+
+# 密钥：绝不入库（.env / .env.*.local 可能含数据库口令、API key）
+# 注意：不匹配 .env.example，模板样例保留入库
+.env
+.env.local
+.env.development
+.env.production
+.env.*.local
+
+# 生成的报告输出（output/ 是程序运行产物，源码在 docs/）
+output/
+
+# 本地 Claude Code 配置（本地私有，不检入，见 CLAUDE.md 加载层级 Local 层）
+.claude/settings.local.json
+
+# 生成缓存 / 构建产物
+# .cache/ = embeddings 向量缓存等运行时生成物；*.tsbuildinfo = TypeScript 构建缓存
+.cache/
+*.tsbuildinfo
+
+# OS / 编辑器
+.DS_Store
+.idea/
+.vscode/

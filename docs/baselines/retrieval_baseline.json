@@ -1,0 +1,36 @@
+{
+  "generated_at": "2026-08-24T09:03:13",
+  "config": {
+    "w_struct": 0.7,
+    "w_semantic": 0.3,
+    "recall_limit": 20,
+    "top_k": 4,
+    "wl_iterations": 3,
+    "embedding_model": "text-embedding-3-small"
+  },
+  "knowledge_base_size": 1501,
+  "n_holdout_queries": 275,
+  "recall_at_10": 1.0,
+  "mean_reciprocal_rank": 0.976,
+  "top_3_hit_rate_after_rerank": 1.0,
+  "latency_ms_p50": 6.64,
+  "latency_ms_p95": 7.65,
+  "per_class_breakdown": {
+    "synth_fanout_split": {
+      "queries": 74,
+      "hit_at_10": 74,
+      "recall_at_10": 1.0
+    },
+    "synth_hybrid": {
+      "queries": 112,
+      "hit_at_10": 112,
+      "recall_at_10": 1.0
+    },
+    "synth_peel_chain": {
+      "queries": 89,
+      "hit_at_10": 89,
+      "recall_at_10": 1.0
+    }
+  },
+  "notes": "相关性=同模板族；查询向量取自留出样本已存向量（理想输入假设）；stub embedding 为 token-bag 哈希，接入真实模型后需重跑基线"
+}

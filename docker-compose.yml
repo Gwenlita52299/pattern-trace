@@ -1,0 +1,113 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: pt
+      POSTGRES_PASSWORD: pt
+      POSTGRES_DB: patterntrace
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pt -d patterntrace"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["11434:11434"]
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.backend
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/patterntrace
+      - REDIS_URL=redis://redis:6379/0
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
+      # get_llm_client 用 os.environ 直读 LLM_API_KEY，不经 .env 文件加载，必须在此透传
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
+      - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
+      - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+      - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn backend.api.app:create_app --factory --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/patterntrace
+      - REDIS_URL=redis://redis:6379/0
+      - ARQ_QUEUE_GRAPH=q_graph
+      - ARQ_QUEUE_LLM=q_llm
+      # worker 与 backend 的判决缓存 key 含 model 名，两侧必须一致；
+      # LLM 配置与 backend 保持同一组变量，保证两种执行形态可互换
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
+      - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
+      - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+    command: arq workers.worker.WorkerSettings
+    healthcheck:
+      test: ["CMD-SHELL", "arq --check workers.worker.WorkerSettings"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # NEXT_PUBLIC_* 在 build 期内联，必须以 build arg 传入而非运行时 env
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+    ports: ["3000:3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  pgdata:
+  ollama_models:

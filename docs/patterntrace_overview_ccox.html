@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PatternTrace · 项目全景</title>
+<style>
+  /* ---- design tokens（参考 dataviz 参考调色板；亮暗同源换挡） ----
+     变量必须挂在 :root：挂在中层容器会让 body 的背景/文字仍按 light 解析，
+     子元素继承到深色墨水落在暗色卡上（亮暗混杂） */
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --ink-1:       #0b0b0b;
+    --ink-2:       #52514e;
+    --ink-muted:   #898781;
+    --hairline:    #e1e0d9;
+    --border:      rgba(11,11,11,.10);
+    --accent:      #2a78d6;
+    --accent-soft: #cde2fb;
+    --good-text:   #006300;
+    --ord-1:       #86b6ef;   /* 序数蓝阶 250 */
+    --ord-2:       #5598e7;   /* 350 */
+    --ord-3:       #1c5cab;   /* 550 */
+    --status-good: #0ca30c;
+  }
+  /* 自动档跟随系统；:where() 让显式 data-theme="light" 能压过 OS 暗色 */
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page:        #0d0d0d;
+      --surface-1:   #1a1a19;
+      --ink-1:       #ffffff;
+      --ink-2:       #c3c2b7;
+      --ink-muted:   #898781;
+      --hairline:    #2c2c2a;
+      --border:      rgba(255,255,255,.10);
+      --accent:      #3987e5;
+      --accent-soft: #104281;
+      --good-text:   #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:        #0d0d0d;
+    --surface-1:   #1a1a19;
+    --ink-1:       #ffffff;
+    --ink-2:       #c3c2b7;
+    --ink-muted:   #898781;
+    --hairline:    #2c2c2a;
+    --border:      rgba(255,255,255,.10);
+    --accent:      #3987e5;
+    --accent-soft: #104281;
+    --good-text:   #0ca30c;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--ink-1);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { min-height: 100vh; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px 72px; }
+
+  /* ---- hero ---- */
+  .hero { padding: 56px 0 36px; border-bottom: 1px solid var(--hairline); }
+  .hero-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+  .kicker { font-size: 13px; letter-spacing: .08em; color: var(--accent); font-weight: 600; margin-bottom: 10px; }
+  h1 { font-size: 40px; line-height: 1.15; letter-spacing: -0.02em; font-weight: 700; }
+  .tagline { margin-top: 14px; max-width: 46em; color: var(--ink-2); font-size: 16.5px; }
+  .tagline b { color: var(--ink-1); }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+  .badge {
+    font-size: 12.5px; color: var(--ink-2);
+    border: 1px solid var(--border); background: var(--surface-1);
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .theme-btn {
+    flex-shrink: 0; cursor: pointer; font-size: 13px;
+    color: var(--ink-2); background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
+  }
+  .theme-btn:hover { color: var(--ink-1); }
+
+  /* ---- section scaffolding ---- */
+  section { margin-top: 44px; }
+  .sec-label { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-muted); margin-bottom: 6px; }
+  h2 { font-size: 21px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 16px; }
+  .sec-sub { color: var(--ink-2); font-size: 14px; margin: -8px 0 18px; max-width: 60em; }
+
+  /* ---- stat tiles ---- */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 720px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px 14px;
+  }
+  .tile .label { font-size: 13px; color: var(--ink-2); }
+  .tile .value { font-size: 34px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
+  .tile .note  { font-size: 12.5px; color: var(--ink-muted); margin-top: 2px; }
+  .tile .note.good { color: var(--good-text); display: flex; align-items: center; gap: 5px; }
+
+  /* ---- pipeline ---- */
+  .pipeline { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+  .step {
+    flex: 1 1 150px; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px;
+  }
+  .step .no { font-size: 11.5px; color: var(--accent); font-weight: 700; }
+  .step .name { font-size: 14.5px; font-weight: 600; margin-top: 1px; }
+  .step .desc { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+  .arrow { align-self: center; color: var(--ink-muted); font-size: 15px; }
+
+  /* ---- architecture diagram ---- */
+  .arch {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 14px; padding: 26px 26px 20px;
+  }
+  .arch-row { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .arch-row { grid-template-columns: 1fr; } }
+  .node {
+    border: 1.5px solid var(--hairline); border-radius: 10px;
+    padding: 12px 14px; background: transparent;
+  }
+  .node.hl { border-color: var(--accent); }
+  .node .t { font-size: 14px; font-weight: 650; }
+  .node .d { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+  .lane { display: flex; justify-content: center; gap: 48px; padding: 6px 0; }
+  .conn { font-size: 12px; color: var(--ink-muted); text-align: center; }
+  .conn .glyph { display:block; font-size: 14px; color: var(--ink-muted); }
+  .infra-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 2px; }
+  @media (max-width: 760px) { .infra-row { grid-template-columns: 1fr; } }
+
+  /* ---- module grid ---- */
+  .mods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 900px) { .mods { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 620px) { .mods { grid-template-columns: 1fr; } }
+  .mod {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 15px 17px;
+  }
+  .mod code.path {
+    display: block; font-size: 12.5px; color: var(--accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    margin-bottom: 6px; word-break: break-all;
+  }
+  .mod .desc { font-size: 13.5px; color: var(--ink-2); }
+  .mod .meta { margin-top: 9px; font-size: 12px; color: var(--ink-muted); }
+
+  /* ---- two-column lists ---- */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 17px 19px;
+  }
+  .panel h3 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+  .panel ul { list-style: none; }
+  .panel li {
+    position: relative; padding-left: 20px; margin-bottom: 7px;
+    font-size: 13.5px; color: var(--ink-2);
+  }
+  .panel li::before {
+    content: ""; position: absolute; left: 4px; top: 8px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
+  .panel li b { color: var(--ink-1); font-weight: 600; }
+
+  /* ---- spec comparison table ---- */
+  table { width: 100%; border-collapse: collapse; background: var(--surface-1);
+          border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 10px 14px; font-size: 13.5px; border-bottom: 1px solid var(--hairline); }
+  th { color: var(--ink-muted); font-weight: 600; font-size: 12.5px; letter-spacing: .03em; }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; color: var(--ink-1); }
+  td.dim { color: var(--ink-2); }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 2px 10px;
+  }
+  .pill.done { color: var(--good-text); border: 1px solid var(--border); }
+  .pill.part { color: var(--ink-2); border: 1px solid var(--border); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot.g { background: var(--status-good); }
+  .dot.m { background: var(--accent); }
+
+  footer {
+    margin-top: 52px; padding-top: 18px; border-top: 1px solid var(--hairline);
+    font-size: 12.5px; color: var(--ink-muted); display: flex;
+    justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+  footer code { font-family: ui-monospace, Menlo, monospace; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="wrap">
+
+    <!-- ================= HERO ================= -->
+    <header class="hero">
+      <div class="hero-top">
+        <div>
+          <div class="kicker">BTC FORENSICS PLATFORM</div>
+          <h1>PatternTrace</h1>
+          <p class="tagline">
+            输入任意 BTC 地址，构建受控交易子图，在知识库中检索相似洗钱模式
+            （Wasabi / Lazarus / 混币中转），由 LLM 给出结构化风险判断
+            （<b>high / medium / low / no_match</b> 四档），支撑案件管理与报告导出的完整业务闭环。
+          </p>
+          <div class="badges">
+            <span class="badge">FastAPI</span><span class="badge">Next.js 14 · React Flow</span>
+            <span class="badge">PostgreSQL 16 · pgvector</span><span class="badge">Redis · arq</span>
+            <span class="badge">Ollama · Qwen3</span><span class="badge">Docker Compose</span>
+            <span class="badge">Fly.io + Vercel</span>
+          </div>
+        </div>
+        <button class="theme-btn" id="themeToggle">🌓 明暗切换</button>
+      </div>
+    </header>
+
+    <!-- ================= STAT TILES ================= -->
+    <section>
+      <div class="sec-label">当前状态 · 2026-08 校准</div>
+      <h2>质量与规模一览</h2>
+      <div class="tiles">
+        <div class="tile">
+          <div class="label">单元测试</div>
+          <div class="value">221</div>
+          <div class="note good">✓ 全部通过（含契约 CT-01~03）</div>
+        </div>
+        <div class="tile">
+          <div class="label">发布门禁 verify_phase6</div>
+          <div class="value">19<span style="color:var(--ink-muted)">/</span>19</div>
+          <div class="note">单元 + E2E + 契约 + 性能 + 部署配置</div>
+        </div>
+        <div class="tile">
+          <div class="label">Compose 服务容器</div>
+          <div class="value">6</div>
+          <div class="note">db · redis · ollama · backend · worker · frontend</div>
+        </div>
+        <div class="tile">
+          <div class="label">种子案例出结论</div>
+          <div class="value">&lt;1s</div>
+          <div class="note good">✓ 三档演示口径，门槛 30s</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PIPELINE ================= -->
+    <section>
+      <div class="sec-label">分析管线</div>
+      <h2>从地址到结论的五步链路</h2>
+      <div class="pipeline">
+        <div class="step"><div class="no">01</div><div class="name">地址输入</div>
+          <div class="desc">checksum 级校验；匿名仅限白名单演示地址</div></div>
+        <div class="arrow">→</div>
+        <div class="step"><div class="no">02</div><div class="name">BFS 子图构建</div>
+          <div class="desc">三队列展开，深度 ≤3、200 节点上限、五类终止条件</div></div>
+        <div class="arrow">→</div>
+        <div class="step"><div class="no">03</div><div class="name">混合检索</div>
+          <div class="desc">pgvector 加权召回（0.7 结构 + 0.3 语义）→ WL 核精排 Top-K</div></div>
+        <div class="arrow">→</div>
+        <div class="step"><div class="no">04</div><div class="name">LLM 判断</div>
+          <div class="desc">JSON Schema 结构化输出；evidence 反向校验防幻觉</div></div>
+        <div class="arrow">→</div>
+        <div class="step"><div class="no">05</div><div class="name">可视化与报告</div>
+          <div class="desc">React Flow 高亮联动；异步 PDF/HTML 签名下载</div></div>
+      </div>
+    </section>
+
+    <!-- ================= ARCHITECTURE ================= -->
+    <section>
+      <div class="sec-label">系统架构</div>
+      <h2>前后端分离 + 异步工作进程</h2>
+      <div class="arch">
+        <div class="arch-row">
+          <div class="node">
+            <div class="t">frontend · :3000</div>
+            <div class="d">Next.js SPA：GraphCanvas 分层画布、VerdictCard 四档色卡、轮询退避、案件管理页</div>
+          </div>
+          <div class="node hl">
+            <div class="t">backend (FastAPI) · :8000</div>
+            <div class="d">JWT 认证 + CSRF 强制 · REST /api/v1 · 分析编排 · 报告签名 · 审计日志</div>
+          </div>
+          <div class="node">
+            <div class="t">worker (arq)</div>
+            <div class="d">同一管线函数的独立进程形态，供扩缩容切换；q_graph / q_llm 双队列预留</div>
+          </div>
+        </div>
+        <div class="lane">
+          <div class="conn"><span class="glyph">↕</span>REST / Bearer + HttpOnly Cookie</div>
+          <div class="conn"><span class="glyph">↕</span>SQLAlchemy / redis-py</div>
+        </div>
+        <div class="infra-row">
+          <div class="node"><div class="t">PostgreSQL 16 + pgvector</div>
+            <div class="d">judgments / cases / patterns 知识库 · HNSW 双列索引</div></div>
+          <div class="node"><div class="t">Redis 7</div>
+            <div class="d">任务队列 · 判决缓存 · refresh rotation 状态（Lua 原子）· Esplora L2 缓存</div></div>
+          <div class="node"><div class="t">Ollama · :11434</div>
+            <div class="d">本地 LLM 推理（qwen3 系列），mock provider 可完全离线</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= MODULES ================= -->
+    <section>
+      <div class="sec-label">代码地图</div>
+      <h2>核心模块</h2>
+      <div class="mods">
+        <div class="mod">
+          <code class="path">backend/graph_builder/</code>
+          <div class="desc">BFS 三队列子图构建：五类终止条件、快照语义、D3 全局 ID 契约；
+          live 数据源带重试退避、熔断切备用端点与 Redis 缓存。</div>
+          <div class="meta">builder.py · esplora.py · data_source.py · id_contract.py</div>
+        </div>
+        <div class="mod">
+          <code class="path">backend/retrieval/</code>
+          <div class="desc">结构特征向量 + 语义 embedding 双路召回，带属性 WL 子树核精排，
+          相似模式输出差异说明供 LLM 引用。</div>
+          <div class="meta">retriever.py · features.py · embedding.py</div>
+        </div>
+        <div class="mod">
+          <code class="path">backend/llm_judge/</code>
+          <div class="desc">Provider 抽象（Ollama / OpenAI 兼容 / mock）；JSON Schema 结构化输出；
+          evidence 必须存在于子图快照，非法引用重试后落 failed 终态。</div>
+          <div class="meta">judge.py · providers.py</div>
+        </div>
+        <div class="mod">
+          <code class="path">backend/services/ · backend/api/</code>
+          <div class="desc">分析编排状态机（queued→processing→completed|failed）、
+          异步报告渲染（PDF/HTML）、种子案例；FastAPI 路由与安全中间件。</div>
+          <div class="meta">orchestration.py · report_service.py · app.py</div>
+        </div>
+        <div class="mod">
+          <code class="path">ingest/</code>
+          <div class="desc">Lazarus 数据切图、正样本合成语料（1500）与三模板负样本（比例 3:1）、
+          embedding 批量计算与版本锁定入库。</div>
+          <div class="meta">load_lazarus_subgraphs.py · corpus_gen.py · common.py</div>
+        </div>
+        <div class="mod">
+          <code class="path">frontend/src/</code>
+          <div class="desc">Tailwind 样式体系；Zustand 状态管理（auth / analysis）；
+          轮询退避与 401 自动刷新重放；graph_safety 悬空边防线。</div>
+          <div class="meta">components/ · store/ · lib/api.ts · middleware.ts</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= QUALITY & SECURITY ================= -->
+    <section>
+      <div class="sec-label">工程基线</div>
+      <h2>质量门禁与安全设计</h2>
+      <div class="cols">
+        <div class="panel">
+          <h3>质量门禁</h3>
+          <ul>
+            <li><b>verify_phase6.sh</b>：发布前一键收口（测试 / E2E / 契约 / 性能 / 配置）</li>
+            <li><b>契约测试 CT-01~03</b>：OpenAPI 快照守护、404 稳定性、悬空边拒绝</li>
+            <li><b>E2E 业务闭环</b>：登录→建案→关联地址→分析→导出，全程 mock 不依赖公网</li>
+            <li><b>CI 三 job</b>：后端 lint/test/codegen 守护、前端 type-check、compose 冒烟；nightly 追加 PERF 性能档</li>
+            <li><b>D3 ID 反向校验</b>：每条 evidence 必须闭合于子图节点/边 ID 集</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>安全基线</h3>
+          <ul>
+            <li><b>密码哈希</b>：bcrypt cost 12（存量 pbkdf2 平滑兼容）</li>
+            <li><b>令牌体系</b>：access 15min + refresh 7d rotation，reuse detection 存 Redis 原子执行；refresh 仅经 HttpOnly Cookie，绝不出现在响应 body</li>
+            <li><b>CSRF</b>：写请求服务端强制校验 <code>X-Requested-With</code></li>
+            <li><b>CORS</b>：显式白名单，allow_credentials 下禁止通配符</li>
+            <li><b>越权隔离</b>：非本人资源一律 404 并落审计日志</li>
+            <li><b>报告下载</b>：HMAC-SHA256 签名 URL，15 分钟过期</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SPEC ALIGNMENT ================= -->
+    <section>
+      <div class="sec-label">文档与实现一致性</div>
+      <h2>Spec ↔ 实现比对结果</h2>
+      <table>
+        <thead><tr><th style="width:90px">级别</th><th class="num" style="width:110px">数量</th><th>说明</th><th style="width:130px">状态</th></tr></thead>
+        <tbody>
+          <tr><td class="dim"><b>P0</b></td><td class="num">4</td>
+            <td class="dim">refresh_token 泄露响应体 · Tailwind 缺失 · workflow 路径错误 · 密码哈希降级</td>
+            <td><span class="pill done"><span class="dot g"></span>全部修复</span></td></tr>
+          <tr><td class="dim"><b>P1</b></td><td class="num">20+</td>
+            <td class="dim">CORS / 迁移机制 / refresh store 已修；限流迁 Redis、详情端点等留作迭代</td>
+            <td><span class="pill part"><span class="dot m"></span>关键项已修</span></td></tr>
+          <tr><td class="dim"><b>P2</b></td><td class="num">若干</td>
+            <td class="dim">记录于比对报告，随迭代消化；有意偏差已在四份 spec 头部标注实现状态</td>
+            <td><span class="pill part"><span class="dot m"></span>记录在案</span></td></tr>
+        </tbody>
+      </table>
+      <p class="sec-sub" style="margin-top:12px">
+        完整清单与逐条核实见 <code>docs/spec-comparison-report.md</code>（含两轮修复执行记录与回归结果）。
+      </p>
+    </section>
+
+    <!-- ================= FOOTER ================= -->
+    <footer>
+      <div>PatternTrace · 让每一笔可疑资金都有迹可循</div>
+      <div>快速开始：<code>docker compose up --build</code> → http://localhost:3000</div>
+    </footer>
+  </div>
+</div>
+
+<script>
+  // 主题切换：显式选择优先于系统偏好（dataviz 规范：dark 是独立选挡而非自动反色）
+  const root = document.documentElement;
+  const btn = document.getElementById('themeToggle');
+  btn.addEventListener('click', () => {
+    const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const cur = root.getAttribute('data-theme') ?? (sysDark ? 'dark' : 'light');
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+</script>
+</body>
+</html>

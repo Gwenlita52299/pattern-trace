@@ -1,0 +1,65 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy-backend-fly:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy backend + worker to Fly.io
+        run: flyctl deploy --remote-only --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Smoke check public API
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf "https://${FLY_APP_NAME}.fly.dev/healthz" && exit 0
+            sleep 5
+          done
+          echo "backend smoke check failed" && exit 1
+        env:
+          FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
+
+  deploy-frontend-vercel:
+    needs: deploy-backend-fly
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Vercel CLI
+        run: npm i -g vercel@latest
+      - name: Pull Vercel environment
+        working-directory: frontend
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      - name: Build
+        working-directory: frontend
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy to production
+        working-directory: frontend
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Smoke check frontend
+        run: |
+          url="${{ vars.PRODUCTION_FRONTEND_URL }}"
+          for i in $(seq 1 30); do
+            curl -sfL "$url" -o /dev/null && exit 0
+            sleep 5
+          done
+          echo "frontend smoke check failed" && exit 1
