@@ -7,6 +7,8 @@ on:
   schedule:
     # nightly 性能档（PERF-01/02）：03:00 UTC
     - cron: "0 3 * * *"
+  # 手动触发（验证 perf-nightly 等 schedule 档，无需等 cron）
+  workflow_dispatch:
 
 jobs:
   lint-test-backend:
