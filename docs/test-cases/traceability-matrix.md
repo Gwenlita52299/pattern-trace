@@ -189,10 +189,10 @@
 | NR-02 | worker Arq broker 显式配置 | §1/D2 | IF-02 |
 | NR-03 | healthcheck+condition service_healthy | §1 | IF-03 |
 | NR-04 | JWT_SECRET 强制注入弱默认拒绝 | §1 | IF-04 |
-| NR-05 | Fly secrets 生产密钥管理 | §2 | IF-05 |
+| NR-05 | .env 生产密钥注入 | §2 | IF-05 |
 | NR-06 | CI PR 三 job 流水线 | §3 | IF-06 |
-| NR-07 | main 合并自动部署 Fly+Vercel | §3/§5-3 | IF-08 |
-| NR-08 | Alembic release phase 失败阻断 | §4 | IF-09 |
+| NR-07 | 私有化交付验证（无外部云依赖） | §3/§5-3 | IF-08 |
+| NR-08 | Alembic 迁移动态启动阻断 | §4 | IF-09 |
 | NR-09 | advisory lock 多实例迁移保护 | §4 | IF-10 |
 | NR-10 | expand-contract 回滚流程 | §4 | IF-11 |
 | NR-11 | rediss:// TLS 连接 | §4 | IF-12 |

@@ -1,7 +1,7 @@
 # Infra 测试用例 · infra-spec
 
 > 模块路径：`infra/`
-> 执行环境：Docker Desktop / Fly.io CLI / GitHub Actions
+> 执行环境：Docker Desktop / GitHub Actions
 
 ---
 
@@ -80,17 +80,18 @@
 
 ---
 
-## IF-05 生产 Fly secrets 注入生效
+## IF-05 生产 .env 密钥注入生效
 
 - **优先级**：P0
-- **来源**：§2 fly secrets set
+- **来源**：§2 `.env` + compose `environment:` 注入
 
 **前置条件**
-- flyctl 已认证且 app 创建
+- `.env` 已配置 JWT_SECRET 等生产密钥
 
 **操作步骤**
-1. `fly secrets set DATABASE_URL=... JWT_SECRET=... LLM_API_KEY=...`
-2. `fly deploy` 后 `fly ssh console -C "[ -n \"$JWT_SECRET\" ] && echo set || echo unset"`
+1. 检查 `.env` 中 JWT_SECRET / LLM_API_KEY 等已填写
+2. `docker compose config` 确认 backend/worker 获得对应环境变量
+3. `docker compose exec backend sh -c "[ -n \"$JWT_SECRET\" ] && echo set || echo unset"`
 
 **预期结果**
 - 存在性检查输出 "set"（环境变量在容器内非空）
@@ -135,40 +136,39 @@
 
 ---
 
-## IF-08 main 分支合并自动部署
+## IF-08 私有化部署交付验证
 
 - **优先级**：P0
-- **来源**：§5 验收标准第 3 条
+- **来源**：§5 验收标准第 3 条（可私有化交付）
 
 **前置条件**
-- PR 通过全部 CI 后 merge 到 main
+- PR 通过全部 CI
 
 **操作步骤**
-1. 观察 deploy job 执行
-2. 访问生产 URL
+1. 在全新环境 `docker compose up --build` 拉起全套
+2. 访问 api 文档与前端入口
 
 **预期结果**
-- flyctl deploy 成功
-- Vercel deploy hook 触发，前端自动更新
-- 生产站点可访问且版本与 main HEAD 一致
+- 后端 /docs 与前端首页可访问
+- 版本与构建产物一致，不依赖任何第三方云平台
 
 ---
 
-## IF-09 Alembic release phase 迁移失败阻断部署
+## IF-09 Alembic 迁移失败阻断启动
 
 - **优先级**：P0
-- **来源**：§4 修订版"迁移失败 → 阻断部署" + 评审 #25
+- **来源**：§4 修订版"迁移失败 → 阻断启动" + 评审 #25
 
 **前置条件**
 - 注入一个故意失败的迁移脚本
 
 **操作步骤**
-1. 推送到 main 触发部署
-2. 观察 release phase 输出
+1. `docker compose up backend`
+2. 观察 backend 容器启动日志
 
 **预期结果**
 - alembic upgrade 失败
-- Fly.io 部署中止，旧版本继续服务
+- backend 容器退出发不出服务（不提供错误 schema）
 - 数据库 schema 未被部分修改（无漂移）
 
 ---
@@ -179,7 +179,7 @@
 - **来源**：§4 修订版并发保护
 
 **前置条件**
-- 本地 docker-compose 或 CI job 环境（Fly release phase 每次部署仅执行一次迁移，无法构造两实例并发，故在本地验证）
+- 本地 docker-compose 或 CI job 环境（容器启动迁移，可本地构造两实例并发验证 advisory lock）
 
 **操作步骤**
 1. 同时启动两个 alembic upgrade head 进程

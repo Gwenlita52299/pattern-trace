@@ -145,7 +145,7 @@ pattern_trace/
 | 缓存 / 队列 | Redis + Celery | 判断缓存、子图构建与入库异步任务 |
 | 认证 | JWT + 角色控制（调查员） | 前后端分离标准方案 |
 | 基础设施 | Docker Compose + GitHub Actions | 本地一键启动 + CI/CD |
-| 部署 | 前端 Vercel / 后端 Fly.io / 数据库 Neon | 低成本公网可访问 |
+| 部署 | docker compose 私有化部署（自托管 DB/Redis，LLM 可走云端） | 客户自有主机一键拉起 |
 
 ---
 
@@ -439,17 +439,17 @@ services:
 
 | 组件 | 平台 | 说明 |
 |---|---|---|
-| 前端 | Vercel | Next.js 原生支持，自动 CI/CD |
-| 后端 API | Fly.io | Docker 部署，低成本 |
-| Celery worker | Fly.io（同镜像） | 与 API 共享代码库 |
-| PostgreSQL + pgvector | Neon / Supabase | Serverless Postgres，免费层可用 |
-| Redis | Upstash / Fly.io Redis | 免费层可用 |
-| LLM | 环境变量切换 | OpenAI / Anthropic API 或本地 Ollama |
+| 前端 | 私有化 docker compose 服务 | Next.js 镜像，构建期内联 `NEXT_PUBLIC_API_URL` |
+| 后端 API | 私有化 docker compose 服务 | Docker 部署，共享代码库镜像 |
+| Celery worker | 私有化 docker compose 服务（同镜像） | 与 API 共享代码库 |
+| PostgreSQL + pgvector | 自托管 `pgvector/pgvector:pg16` | compose 数据卷持久化 |
+| Redis | 自托管 `redis:7-alpine` | 免费层可用（本地资源） |
+| LLM | 环境变量切换 | DeepSeek 默认 / OpenAI 兼容 / 本地 Ollama |
 
 ### 7.3 CI/CD（GitHub Actions）
 
 - PR：lint + type check + 单元测试 + 集成测试（docker-compose 起 db/redis）
-- main 合并：构建镜像 → 部署 Fly.io（后端）→ 触发 Vercel（前端）
+- CI 只做验证门禁；交付形态为 docker compose 私有化部署，不做云端发布
 - 数据库迁移：Alembic upgrade 在部署前自动执行
 
 ---

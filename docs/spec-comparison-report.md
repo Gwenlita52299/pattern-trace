@@ -93,9 +93,9 @@ spec 预期档位为 Qwen3-30B-A3B / 8B。生产部署需配置足量模型。
 - ✓ RefreshTokenStore 是进程内 dict：重启丢 rotation 状态（reuse detection 失效）、
   多实例不共享；models 里定义的 RefreshToken 表无任何代码使用 — security.py:79-108
 - ✓ 无 CORS 中间件，前后端分离部署跨域不可用 — app.py 全文
-- ✓ Fly.toml 无 release_command，迁移在 app 启动命令里执行且双进程组各自跑，
-  env.py 亦无 advisory lock → 并发迁移风险 — fly.toml, migrations/env.py
-- deploy workflow 与 CI 无门禁关联（CI 失败照样部署）— deploy.yml:3-12
+- ✓ 迁移在 backend 容器启动命令里执行；env.py 早前无 advisory lock → 并发迁移风险
+  （已修复：env.py 取锁后清 autobegin 事务）— migrations/env.py
+- CI 早期无迁移前置（DB 测试在空库上会 connection refused）— ci.yml（已改为先迁移 DB）
 
 **图构建（graph-builder-spec）**
 - §7 整套 Esplora 容错层（L1/L2 缓存、退避重试、熔断、备用 provider、并发预算）
@@ -145,7 +145,7 @@ spec 预期档位为 Qwen3-30B-A3B / 8B。生产部署需配置足量模型。
 - early_stop 摘要节点 id `tx:<txid>:overflow` 不符 D3 解析规则；builder 的
   value_ratio 恒 0 与 ingest 同位置边不一致；两侧 canonical 浮点精度口径不一
 - VerdictCard 把 judgment id 前 8 位标为 `model {…}`；graph_safety.ts 前端零引用
-- vercel.json installCommand 未用 npm ci（不可复现构建）
+- 前端镜像构建早期未用 npm ci（不可复现构建）— frontend/Dockerfile
 - tests/unit/__pycache__ 残留孤儿 .pyc
 
 ---
@@ -157,7 +157,7 @@ hops 1–3、混合召回权重服务端锁定、负样本隔离表、HNSW 双�
 双重锁校验、JWT access/refresh TTL 与 Cookie 属性、CSRF 强制、审计日志覆盖写操作、
 Idempotency-Key、签名 URL HMAC+15min、报告证据链内嵌（hash/model/prompt/builder）、
 权限矩阵 401/403、Problem Details 格式、compose 六服务与健康检查、CI 三 job 骨架、
-Fly/Vercel 平台分工、P2 明确不做清单与 product-design 逐字一致、mock 三档种子案例。
+私有化交付方案（docker compose）、P2 明确不做清单与 product-design 逐字一致、mock 三档种子案例。
 
 ## 五、建议处理顺序
 
@@ -185,7 +185,7 @@ Fly/Vercel 平台分工、P2 明确不做清单与 product-design 逐字一致�
 | P0-3 | 移除 workflow 全部 `pattern_trace/` 前缀；auth 冒烟先建号再登录 | ci.yml、deploy.yml |
 | P0-4 | 真 bcrypt cost 12；存量 pbkdf2$ 哈希保留验证兼容 | security.py、pyproject |
 | P1 CORS | CORSMiddleware 显式白名单（默认 localhost:3000，生产走 CORS_ORIGINS），最后注册保证 preflight 不经 CSRF | app.py、config.py |
-| P1 迁移 | fly.toml `[deploy] release_command`，app 进程去 alembic；env.py 加 pg_advisory_lock | fly.toml、migrations/env.py |
+| P1 迁移 | env.py 加 pg_advisory_lock（取锁后清 autobegin 事务）；迁移随 backend 容器启动执行 | migrations/env.py |
 | P1 refresh store | Redis Lua 原子轮换（防并发重放分裂 token），不可达降级进程内；生产 Cookie 同步改 SameSite=None | security.py、app.py |
 | 二档容错层 | LiveEsploraProvider 接线重试退避/熔断切备用/Redis L2（共享 CircuitBreaker 与缓存键规范） | graph_builder/data_source.py |
 | 二档终止条件 | unspent 取自响应 vout spent 状态；编排层传 seed_block_time 使 out_of_range 生效（fixture/live 双模式） | data_source.py、orchestration.py |

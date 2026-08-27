@@ -806,7 +806,7 @@
 
 **预期结果**
 - 后端忽略客户端伪造的 XFF 值
-- rate limit 以 Fly/Vercel 注入的真实 client IP 计算
+- rate limit 以可信反向代理/网关注入的真实 client IP 计算
 - 无法通过伪造 header 绕过限流
 
 ---

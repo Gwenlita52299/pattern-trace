@@ -237,7 +237,7 @@ laundering-pattern-intel/
 | 缓存/队列 | Redis + Celery | 判断缓存、子图构建与入库异步任务 |
 | 鉴权 | JWT + 角色（调查员） | 前后端分离标准方案 |
 | 基础设施 | Docker Compose + GitHub Actions | 本地一键启动 + CI/CD |
-| 部署 | 前端 Vercel / 后端 Fly.io / 数据库 Neon（或同类） | 低成本公网可访问 |
+| 部署 | docker compose 私有化部署（自托管 DB/Redis，LLM 可走云端） | 客户自有主机一键拉起 |
 
 ### 9.3 核心 API
 

@@ -2,7 +2,7 @@
 
 > 模块路径：`pattern_trace/infra/`
 > 本地开发：Docker Compose 一键启动
-> 生产：前端 Vercel / 后端 Fly.io / 数据库 Neon
+> 生产：Docker Compose 私有化部署（自托管 DB/Redis/Ollama，LLM 可走云端兼容端点）
 
 ## 1. Docker Compose（本地开发）
 
@@ -67,16 +67,19 @@ services:
 
 | 组件 | 平台 | 说明 |
 |---|---|---|
-| 前端 | Vercel | Next.js 自动部署 |
-| 后端 API | Fly.io | Docker 部署，共享代码库镜像 |
-| Celery Worker | Fly.io（同镜像） | 独立进程 |
-| PostgreSQL + pgvector | Neon / Supabase | Serverless Postgres |
-| Redis | Upstash / Fly.io Redis | 免费层可用 |
-| Ollama (LLM) | 自托管 GPU 服务器或云 API | 或 fallback 到 OpenAI |
+| 前端 | 私有化 docker compose 服务 | Next.js 镜像，构建期内联 `NEXT_PUBLIC_API_URL` |
+| 后端 API | 私有化 docker compose 服务 | Docker 部署，共享代码库镜像 |
+| Worker (arq) | 私有化 docker compose 服务（同镜像） | 独立进程 |
+| PostgreSQL + pgvector | 自托管 `pgvector/pgvector:pg16` | compose 数据卷持久化 |
+| Redis | 自托管 `redis:7-alpine` | 队列 + 缓存 |
+| Ollama (LLM) | 自托管容器或外部兼容端点 | 或切换 DeepSeek/OpenAI 兼容 API |
 
-环境变量通过 Fly.io secrets 管理：
+环境变量经 `.env` + compose `environment:` 注入：
 ```bash
-fly secrets set DATABASE_URL=... REDIS_URL=... JWT_SECRET=... LLM_API_KEY=...
+# .env  示例（参考 .env.example，勿纳入版本库）
+JWT_SECRET=<64-char-random>
+LLM_PROVIDER=ollama   # 或 deepseek
+LLM_BASE_URL=http://ollama:11434
 ```
 
 ## 3. GitHub Actions CI/CD
@@ -115,32 +118,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose up --build -d
-      - run: npx playwright test
-
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    needs: e2e
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy backend to Fly.io
-        run: flyctl deploy --config infra/fly.toml
-      - name: Trigger Vercel deployment
-        run: curl -X POST ${{ secrets.VERCEL_DEPLOY_HOOK }}
+      - run: curl -f http://localhost:8000/healthz && curl -f http://localhost:8000/readyz
 ```
+
+CI 仅作验证门禁，不做云端发布；交付形态为 docker compose 私有化部署。
 
 ## 4. 数据库迁移
 
-- Alembic 在 Fly.io **release phase** 单实例执行 `alembic upgrade head`
+- Alembic 在 backend 容器启动时自动执行 `alembic upgrade head`（任一容器先起即建表）
 - 迁移脚本位于 `backend/migrations/versions/`
 - CI 中使用空数据库测试迁移可重复执行
-- release phase 迁移失败 → **阻断部署**（旧实例继续服务旧 schema，不产生漂移）
-- 手动回滚流程：`fly releases rollback` + 按需 `alembic downgrade`（破坏性变更必须写成 expand-contract 两阶段）
+- 迁移失败 → backend 容器退出，old 版本不提供错误 schema（不产生漂移）
+- 手动回滚：down 容器 / 按需 `alembic downgrade`（破坏性变更必须写成 expand-contract 两阶段）
 - 多实例并发保护：alembic 迁移入口加 PostgreSQL advisory lock
-- 生产 Redis（Upstash TLS）连接串使用 `rediss://`；Neon PgBouncer transaction pooling 下 SQLAlchemy 连接串需 `?prepared_statement_cache_size=0` 类等价配置
+- 私有化数据库连接串即标准 `postgresql://pt:pt@db:5432/patterntrace`，无托管连接池特化
 
 ## 5. 验收标准
 
 - [ ] `docker compose up --build` 一键启动所有服务
 - [ ] GitHub Actions PR 触发完整测试流水线
-- [ ] main 分支合并自动部署到 Fly.io + Vercel
+- [ ] 可私有化部署：`.env` 注入密钥 + compose 一键起全套，无外部云依赖
 - [ ] Alembic 迁移在空数据库上成功执行

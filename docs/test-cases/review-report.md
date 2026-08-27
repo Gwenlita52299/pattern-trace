@@ -84,8 +84,8 @@
 ### Infra / 跨模块（IF / CM）
 
 - IF-01 "等待 60 秒后 ps"脆弱 → 轮询 healthcheck 直至 healthy（带超时）；ollama 模型加载列为本地检查项
-- IF-05 SSH echo 密钥回显风险 → 改存在性检查不回显内容
-- IF-10 Fly release phase 构造不出两实例并发迁移 → 改本地并发两个 alembic 进程验证 advisory lock
+- IF-05 容器内密钥回显风险 → 改存在性检查不回显内容
+- IF-10 构造不出两实例并发迁移 → 改本地并发两个 alembic 进程验证 advisory lock
 - IF-16 "检查配置指向 mock"不能证明无真实外呼 → CI 加 DNS/代理黑名单断言零命中
 - CM-01 "全程无跨进程 RPC"不可外部观测 → 改 import 边界架构测试 + 本用例保留功能断言
 - CM-02 步骤只取第一条 ID 但预期要求全集匹配 → ID 全集校验下沉为脚本遍历断言，前端仅保留 UI 点击断言

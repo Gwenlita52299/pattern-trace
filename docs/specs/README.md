@@ -12,7 +12,7 @@
 | services/retrieval/ | [retrieval-spec.md](retrieval-spec.md) | 结构特征向量 + 语义 embedding + 混合召回 + 带属性 WL 精排 |
 | services/llm-judge/ | [llm-judge-spec.md](llm-judge-spec.md) | Provider 抽象 + JSON Schema + 防幻觉四重机制 + 校验通过才缓存 |
 | ingest/ | [ingest-spec.md](ingest-spec.md) | Lazarus 切图 + 负样本隔离 + 标签加载 + embedding 版本锁定 |
-| infra/ | [infra-spec.md](infra-spec.md) | Docker Compose(healthcheck) + Fly.io/Vercel 部署 + GitHub Actions CI/CD |
+| infra/ | [infra-spec.md](infra-spec.md) | Docker Compose(healthcheck) + 私有化部署 + GitHub Actions CI/CD |
 | tests/ | [tests-spec.md](tests-spec.md) | 单元/集成/E2E 测试策略 + 检索/LLM 评估脚本 + 性能基准 |
 
 ## 关键跨文档决策（详见 review summary）

@@ -133,7 +133,7 @@ Validation:
 **成本控制（匿名滥用防护）**：
 - 免登录仅允许 `DEMO_ADDRESSES` 白名单内地址（env 配置）
 - 登录用户可分析任意地址
-- Rate limit：匿名 10 req/min/IP（X-Forwarded-For 仅信任 Fly.io/Vercel 代理层注入值）+ 匿名全局日配额 `ANON_DAILY_TASK_QUOTA`（默认 500 任务/天，超出返回 429）
+- Rate limit：匿名 10 req/min/IP（X-Forwarded-For 仅信任可信反向代理/网关层注入值）+ 匿名全局日配额 `ANON_DAILY_TASK_QUOTA`（默认 500 任务/天，超出返回 429）
 - 429 响应带 `Retry-After` header，Problem Details 格式
 
 Response 202 Accepted:
@@ -266,7 +266,7 @@ failed 时：
 - 所有写操作写 audit_logs
 - Rate limiting：Redis 令牌桶；匿名 IP 维度 + 登录 user_id 维度双轨
 - Pydantic v2 输入校验，所有字段强类型；retrieval 混合召回权重从服务端配置读取，禁止由请求传入（SQL 一律绑定参数）
-- 密钥管理：生产经 Fly secrets 注入；compose 开发默认值仅限本地且显式标注
+- 密钥管理：生产经 `.env` + compose `environment:` 注入（私有化）；默认值仅限本地且显式标注
 
 ## 6. 验收标准
 

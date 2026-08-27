@@ -11,7 +11,7 @@
 | 子图构建 | BFS 三队列 + 五类终止条件（unspent / 时间窗 / 深度≤3 / 规模裁剪 / early-stop）；live 模式带重试退避、熔断切备用端点与 Redis 缓存 |
 | 知识库 | 正/负样本入库 + pgvector 语义向量 + 结构指纹；负样本独立表隔离，不参与召回 |
 | 混合检索 | pgvector 加权召回 → 带属性 WL kernel 结构精排 → Top-K |
-| LLM 判断 | Ollama 本地优先，OpenAI 兼容可切换，mock 可离线演示；JSON 结构化输出；evidence 必须反向存在于子图快照（防幻觉校验，非法引用重试后落 failed） |
+| LLM 判断 | DeepSeek 云端主推，Ollama 本地/OpenAI 兼容可切换，mock 可离线演示；JSON 结构化输出；evidence 必须反向存在于子图快照（防幻觉校验，非法引用重试后落 failed） |
 | 可视化 | React Flow 分层画布、evidence 点击高亮、混币器红框双编码 |
 | 业务闭环 | 案件 CRUD、地址关联、异步 PDF/HTML 报告（HMAC 签名下载）、审计日志 |
 
@@ -23,7 +23,7 @@ frontend (Next.js + React Flow)      backend (FastAPI)            workers (arq)
         ├──────────────────────────────► │  JWT access+refresh      │
         │                                ├──────────────────────────┤
         │                          PostgreSQL (pgvector)   Redis (queue/cache)
-                                         Ollama (qwen3 等)
+                                         DeepSeek API (或本地 Ollama)
 ```
 
 - `backend/graph_builder/`：子图构建核心（D3 全局 ID 规范 `addr:*` / `tx:*` / `edge:*`）
@@ -54,12 +54,13 @@ open http://localhost:8000/docs    # API 文档
 LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture python -m backend.services.seed_cases
 ```
 
-> 提示：`ollama` 容器默认无模型。真实推理前需拉取并让 backend/worker 使用同一
-> 模型名（判决缓存 key 含 model，两侧必须一致）：
+> 提示：默认走 DeepSeek（`LLM_PROVIDER=deepseek`），无需本地模型。若改用
+> `ollama` 本地推理，容器默认无模型，需拉取并让 backend/worker 使用同一模型名
+> （判决缓存 key 含 model，两侧必须一致）：
 >
 > ```bash
 > docker exec pattern_trace-ollama-1 ollama pull qwen3:8b
-> LLM_MODEL=qwen3:8b docker compose up -d backend worker
+> LLM_PROVIDER=ollama LLM_MODEL=qwen3:8b docker compose up -d backend worker
 > ```
 
 ### 仅跑后端开发环境
@@ -80,9 +81,9 @@ LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture uv run python tests/evaluation/run_e2e
 |---|---|
 | `JWT_SECRET` | **必填**，无弱默认（IF-04） |
 | `BOOTSTRAP_ADMIN_EMAIL/PASSWORD` | 首个 admin 账号，空则不 seed |
-| `LLM_PROVIDER` | `ollama`（默认）/ OpenAI 兼容 / `mock`（测试与演示） |
-| `LLM_MODEL` | 默认 `qwen3:30b-a3b`；本地小机可换 `qwen3:8b` 等 |
-| `LLM_BASE_URL` | Ollama 地址，compose 内为 `http://ollama:11434` |
+| `LLM_PROVIDER` | `deepseek`（默认）/ `ollama` / OpenAI 兼容 / `mock`（测试与演示） |
+| `LLM_MODEL` | 默认 `deepseek-chat`；本地 ollama 可换 `qwen3:8b` 等 |
+| `LLM_BASE_URL` | `deepseek` 为 `https://api.deepseek.com`；`ollama` 为 `http://ollama:11434` |
 | `GRAPH_DATA_MODE` | `fixture`（内置演示图，离线）/ `live`（Esplora 公网） |
 | `ESPLORA_API_URL` | live 数据源，默认 `https://mempool.space/api`（自动切 Blockstream 备用） |
 | `DEMO_SEEDS` | 匿名免登录白名单地址 CSV；空则用 fixture 内置 seed |
@@ -100,37 +101,28 @@ uv run python tests/performance/perf_phase6.py PERF-01    # 报告容量基准
 
 CI（`.github/workflows/ci.yml`）：PR 触发三个 job —— 后端 lint/test/codegen 守护、
 前端 type-check、compose E2E 冒烟；`schedule` nightly 追加 PERF 性能档。
-main 合入由 `.github/workflows/deploy.yml` 自动发布（backend → Fly.io，
-成功后 frontend → Vercel，各带公网 smoke check）。
+CI 只做验证门禁，不负责发布；交付形态是 docker compose 私有化部署（见下文）。
 
 ## 部署
 
-### Fly.io（backend + worker）
+本项目定位为**可私有化部署**：源码 + `docker compose` 一套编排，即可在自有主机
+拉起全部服务，不依赖任何第三方公开云平台。
 
-迁移已配置在 release 阶段单实例执行（`fly.toml [deploy] release_command`），
-app 进程不再自带 alembic；并发迁移另有 PostgreSQL advisory lock 双保险。
-
-```bash
-fly launch --no-deploy --name patterntrace-api
-fly postgres create && fly postgres attach <pg-app>
-fly secrets set JWT_SECRET=... REDIS_URL=... \
-  LLM_PROVIDER=ollama LLM_BASE_URL=http://<ollama-app>.fly.internal:11434 \
-  COOKIE_SECURE=true CORS_ORIGINS=https://<your-vercel-app>.vercel.app
-fly deploy
-```
-
-### Vercel（frontend）
+前置：Docker、`.env` 中配置 `JWT_SECRET`、bootstrap admin 与 LLM/数据源
+（参考 `.env.example`）；`docker compose` 已透传全部运行时变量。
 
 ```bash
-cd frontend && vercel link
-vercel env add NEXT_PUBLIC_API_URL production   # https://<fly-app>.fly.dev/api/v1
-vercel --prod
+git clone <repo> && cd pattern_trace
+cp .env.example .env          # 填写 JWT_SECRET / 生产 LLM / 数据源等
+docker compose up --build     # db / redis / ollama / backend / worker / frontend
+open http://localhost:3000
 ```
 
-或由 deploy workflow 自动部署（secrets：`FLY_API_TOKEN`、`VERCEL_TOKEN`、
-`VERCEL_ORG_ID`、`VERCEL_PROJECT_ID`；vars：`FLY_APP_NAME`、
-`PRODUCTION_FRONTEND_URL`）。注意 `NEXT_PUBLIC_*` 在构建期内联，
-改 API 地址需重新构建而非仅改运行时变量。
+- **迁移自动执行**：backend 容器启动即 `alembic upgrade head`，无需单独步骤。
+- **生产口径**：live 数据源 + DeepSeek 云端判断（见
+  [docs/production-runbook.md](docs/production-runbook.md)）；如需本地推理可切 `ollama`。
+- 生产加固项（`COOKIE_SECURE`、`CORS_ORIGINS` 等）由 `.env` 注入，`docker compose`
+  自行按需编排反向代理，不绑定任何平台。
 
 ## 安全基线
 
@@ -153,6 +145,7 @@ vercel --prod
 | 文档 | 内容 |
 |---|---|
 | [docs/user-guide.md](docs/user-guide.md) | 使用说明：从启动到完整业务闭环、API 直调要点与故障排查 |
+| [docs/production-runbook.md](docs/production-runbook.md) | 生产运行手册：当前配置、启动/回收、手工复现链路与排障 |
 | [docs/specs/](docs/specs/) | 八份模块 spec（grill-me 风格）+ 评审修订记录 |
 | [docs/spec-comparison-report.md](docs/spec-comparison-report.md) | 全局端到端校验结果 + spec↔实现差异比对与修复记录 |
 | [docs/project-schedule.md](docs/project-schedule.md) | 六阶段排期与门禁完成标志 |

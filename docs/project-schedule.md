@@ -116,12 +116,12 @@
 ## 阶段 6 · 测试与发布
 
 - 单元 / 集成 / E2E 测试收口
-- CI/CD（PR 三 job 流水线 + main 自动部署）
-- Fly.io + Vercel 部署
+- CI/CD（PR 三 job 流水线 + 验证门禁）
+- docker compose 私有化部署
 - README + 演示视频
 
 **完成标志**
-- 公网可访问
+- `docker compose up` 一键拉起全套（可私有化交付）
 - 种子案例 30 秒出结论
 
 **并行测试**
