@@ -24,6 +24,10 @@ dist/
 # 生成的报告输出（output/ 是程序运行产物，源码在 docs/）
 output/
 
+# 生产运行手册：含真实生产配置（DeepSeek key、live 环境口令示例），不入库
+# （与 .env 同类敏感文档，源码/说明见 README 的 docs 索引）
+docs/production-runbook.md
+
 # 本地 Claude Code 配置（本地私有，不检入，见 CLAUDE.md 加载层级 Local 层）
 .claude/settings.local.json
 
