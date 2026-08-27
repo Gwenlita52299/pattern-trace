@@ -121,6 +121,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --extra dev
+      - name: Migrate database
+        run: DATABASE_URL=postgresql://pt:pt@localhost:5432/patterntrace JWT_SECRET=perf-nightly-secret uv run alembic upgrade head
       - name: PERF-01 report capacity (fixture 档)
         env:
           DATABASE_URL: postgresql://pt:pt@localhost:5432/patterntrace
