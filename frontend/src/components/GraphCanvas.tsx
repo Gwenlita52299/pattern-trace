@@ -7,17 +7,24 @@
 // canonical 证据 ID（addr:/tx:/edge:）经 resolveHighlightIds() 映射到本视图
 // 的节点/边 ID，供 FE-26 证据高亮沿用。
 //
+// 交互（本轮新增）：
+//   - 节点级下游「展开 / 收回」：有下游（出边）的节点右上角出现 +/− 圆钮，
+//     点击折叠/展开该节点下游（可达）的所有节点与边。
+//   - 节点自由拖动：nodesDraggable 开启；拖动位置写入 posMap（受控节点+onNodesChange），
+//     折叠/展开或深度过滤时已见节点沿用自己的位置（不跳动），仅新节点取布局位置。
+//
 // 高亮实现（FE-26）：highlightIds 通过 Context 下发，自定义节点组件
 // 内部订阅——高亮变化不重建 nodes 数组（引用稳定），只有受影响节点重渲染。
 // 布局：按 first_layer 左→右分层（BFS 深度即横轴），无额外依赖；
-// dagre 属 P2 打磨项。只读画布：nodesConnectable/nodesDraggable 均关闭。
-import { createContext, memo, useContext, useMemo } from "react";
+// dagre 属 P2 打磨项。
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
   MarkerType,
   type Edge as RFEdge,
   type Node as RFNode,
+  type OnNodesChange,
 } from "reactflow";
 import "reactflow/dist/style.css";
 
@@ -36,7 +43,11 @@ const HighlightContext = createContext<Set<string>>(new Set());
 
 interface NodeData {
   raw: GraphNode;
-  onSelect: (id: string) => void;
+  /** 该节点当前是否处于「已收回」状态（下游隐藏）。 */
+  collapsed: boolean;
+  /** 该节点是否有下游节点（用于决定是否显示展开/收回圆钮）。 */
+  hasChildren: boolean;
+  onToggle: (id: string) => void;
 }
 
 function isHighlighted(id: string): string {
@@ -54,8 +65,7 @@ const AddressNode = memo(function AddressNode({
     <div
       role="button"
       aria-label={`address ${data.raw.label ?? data.raw.id}`}
-      onClick={() => data.onSelect(data.raw.id)}
-      className={`rounded-lg border px-3 py-2 text-xs shadow-sm cursor-pointer transition-shadow ${
+      className={`relative rounded-lg border px-3 py-2 text-xs shadow-sm cursor-pointer transition-shadow ${
         mixer
           ? "border-red-500 border-2 bg-white" // FE-13：混币器红框 + ⚠ 双编码
           : "border-slate-300 bg-white"
@@ -74,6 +84,23 @@ const AddressNode = memo(function AddressNode({
         {data.raw.total_received_btc !== undefined &&
           ` · Σ${data.raw.total_received_btc.toFixed(3)} BTC`}
       </div>
+      {data.hasChildren && (
+        <button
+          type="button"
+          // nodrag：React Flow 在此按下时不要启动节点拖动；stopPropagation 防止冒泡到
+          // 节点选中（React Flow onNodeClick）。
+          className="nodrag absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-[11px] font-bold leading-none text-slate-600 shadow-sm hover:bg-slate-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            data.onToggle(data.raw.id);
+          }}
+          aria-label={data.collapsed ? "展开下游" : "收起下游"}
+          title={data.collapsed ? "展开下游" : "收起下游"}
+        >
+          {data.collapsed ? "+" : "−"}
+        </button>
+      )}
     </div>
   );
 });
@@ -91,15 +118,64 @@ function flowAmountLabel(e: FlowEdge): string {
   return "";
 }
 
+/** 从 id 出发，沿有向边可达的所有节点（不含 id 本身）。 */
+function computeDescendants(flow: AddressFlow, id: string): Set<string> {
+  const children = new Map<string, string[]>();
+  for (const e of flow.edges) {
+    const arr = children.get(e.source);
+    if (arr) arr.push(e.target);
+    else children.set(e.source, [e.target]);
+  }
+  const out = new Set<string>();
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    for (const c of children.get(cur) ?? []) {
+      if (!out.has(c)) {
+        out.add(c);
+        stack.push(c);
+      }
+    }
+  }
+  return out;
+}
+
+/** 所有「已收回」节点的下游节点的并集——这些节点当前应隐藏。 */
+function hiddenSet(flow: AddressFlow, collapsed: Set<string>): Set<string> {
+  const hidden = new Set<string>();
+  for (const id of collapsed) {
+    for (const d of computeDescendants(flow, id)) hidden.add(d);
+  }
+  return hidden;
+}
+
 function buildFlow(
   flow: AddressFlow,
   maxLayer: number | null,
-  onSelect: (id: string) => void,
-): { rfNodes: RFNode[]; rfEdges: RFEdge[] } {
+  collapsed: Set<string>,
+  posMap: Record<string, { x: number; y: number }>,
+  onToggle: (id: string) => void,
+): {
+  rfNodes: RFNode[];
+  rfEdges: RFEdge[];
+  layoutPos: Record<string, { x: number; y: number }>;
+} {
+  const hidden = hiddenSet(flow, collapsed);
   const visible = flow.nodes.filter(
-    (n) => maxLayer === null || (n.first_layer ?? 0) <= maxLayer,
+    (n) =>
+      (maxLayer === null || (n.first_layer ?? 0) <= maxLayer) &&
+      !hidden.has(n.id),
   );
   const visibleIds = new Set(visible.map((n) => n.id));
+
+  // 节点是否有下游（在层过滤范围之内）：决定是否显示展开/收回圆钮
+  const childByLayer = new Set<string>();
+  const targetLayer = new Map<string, number>();
+  for (const n of flow.nodes) targetLayer.set(n.id, n.first_layer ?? 0);
+  for (const e of flow.edges) {
+    const tLayer = targetLayer.get(e.target) ?? 0;
+    if (maxLayer === null || tLayer <= maxLayer) childByLayer.add(e.source);
+  }
 
   // 分层布局：同层节点纵向均排，层序即横轴
   const byLayer = new Map<number, GraphNode[]>();
@@ -110,18 +186,26 @@ function buildFlow(
   });
 
   const rfNodes: RFNode[] = [];
+  const layoutPos: Record<string, { x: number; y: number }> = {};
   byLayer.forEach((layerNodes, layer) => {
     const height = layerNodes.length * NODE_SPACING_Y;
     layerNodes.forEach((n, i) => {
+      const lp = {
+        x: layer * LAYER_SPACING_X,
+        y: i * NODE_SPACING_Y - height / 2,
+      };
+      layoutPos[n.id] = lp;
       rfNodes.push({
         id: n.id,
         type: "address", // 地址流式视图只有 address 节点
-        position: {
-          x: layer * LAYER_SPACING_X,
-          y: i * NODE_SPACING_Y - height / 2,
-        },
-        data: { raw: n, onSelect } satisfies NodeData,
-        draggable: false,
+        position: posMap[n.id] ?? lp, // 已见节点沿用已有/拖拽位置，新节点取布局位置
+        data: {
+          raw: n,
+          collapsed: collapsed.has(n.id),
+          hasChildren: childByLayer.has(n.id),
+          onToggle,
+        } satisfies NodeData,
+        draggable: true, // 自由拖动节点
         connectable: false,
       });
     });
@@ -151,7 +235,7 @@ function buildFlow(
       } satisfies RFEdge;
     });
 
-  return { rfNodes, rfEdges };
+  return { rfNodes, rfEdges, layoutPos };
 }
 
 export interface GraphCanvasProps {
@@ -167,21 +251,62 @@ export default function GraphCanvas({
   maxLayer = null,
   onNodeClick,
 }: GraphCanvasProps) {
-  const handleSelect = useMemo(
-    () => (id: string) => {
+  // 已收回（折叠）的下游节点集合，及其稳定位置缓存（供拖动 & 折叠不跳动）
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [posMap, setPosMap] = useState<Record<string, { x: number; y: number }>>({});
+
+  const handleSelect = useCallback(
+    (id: string) => {
       const node = subgraph.nodes.find((n) => n.id === id);
       if (node && onNodeClick) onNodeClick(node);
     },
     [subgraph, onNodeClick],
   );
 
+  const handleToggle = useCallback((id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // 受控节点拖动：仅保存 position 类变更到 posMap，供受控渲染跟随。
+  const handleNodesChange: OnNodesChange = useCallback((changes) => {
+    setPosMap((prev) => {
+      let next: Record<string, { x: number; y: number }> | null = null;
+      for (const ch of changes) {
+        if (ch.type === "position" && ch.position) {
+          if (!next) next = { ...prev };
+          next[ch.id] = { x: ch.position.x, y: ch.position.y };
+        }
+      }
+      return next ?? prev;
+    });
+  }, []);
+
   // 展示变换：canonical 子图 → 地址节点 + 交易边（含入/出边金额）。
-  // 不直接渲染生成的子图；仅子图或过滤变化时重建（FE-26 高亮不参与）。
   const flow = useMemo(() => toAddressFlow(subgraph), [subgraph]);
-  const { rfNodes, rfEdges } = useMemo(
-    () => buildFlow(flow, maxLayer ?? null, handleSelect),
-    [flow, maxLayer, handleSelect],
+  const { rfNodes, rfEdges, layoutPos } = useMemo(
+    () => buildFlow(flow, maxLayer ?? null, collapsed, posMap, handleToggle),
+    [flow, maxLayer, collapsed, posMap, handleToggle],
   );
+
+  // 播种稳定位置：把每次首次出现的节点布局位置记入 posMap，折叠/过滤不跳动；
+  // 后续仅用户拖动（onNodesChange）会改写对应位。
+  useEffect(() => {
+    setPosMap((prev) => {
+      let next: Record<string, { x: number; y: number }> | null = null;
+      for (const id in layoutPos) {
+        if (!(id in prev)) {
+          if (!next) next = { ...prev };
+          next[id] = layoutPos[id];
+        }
+      }
+      return next ?? prev;
+    });
+  }, [layoutPos]);
 
   // 证据高亮：canonical id（addr:/tx:/edge:）→ 本视图节点/边 id
   const displayHighlightIds = useMemo(
@@ -195,10 +320,11 @@ export default function GraphCanvas({
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
+          onNodesChange={handleNodesChange}
           nodeTypes={nodeTypes}
+          onNodeClick={(_evt, node) => handleSelect(node.id)}
           onlyRenderVisibleElements // 大图虚拟化（200 节点性能预算）
           nodesConnectable={false}
-          nodesDraggable={false}
           elementsSelectable
           fitView
           proOptions={{ hideAttribution: true }}
