@@ -1,5 +1,11 @@
 "use client";
-// 图谱画布（frontend-spec §4）：React Flow 自定义节点/边 + 分层布局。
+// 图谱画布（frontend-spec §4 · 地址流式展示）：React Flow 自定义节点 + 分层布局。
+//
+// 展示模型变更（address-as-node / tx-as-edge）：画布**不直接渲染后端返回的
+// canonical 子图**（其中 tx 也是节点），而是经 toAddressFlow() 变换为
+// 「仅 address 节点 + 交易作为有向边」的流式图，每条边标注入边/出边交易金额。
+// canonical 证据 ID（addr:/tx:/edge:）经 resolveHighlightIds() 映射到本视图
+// 的节点/边 ID，供 FE-26 证据高亮沿用。
 //
 // 高亮实现（FE-26）：highlightIds 通过 Context 下发，自定义节点组件
 // 内部订阅——高亮变化不重建 nodes 数组（引用稳定），只有受影响节点重渲染。
@@ -16,6 +22,12 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 import type { GraphEdge, GraphNode } from "@/store/analysis";
+import {
+  resolveHighlightIds,
+  toAddressFlow,
+  type AddressFlow,
+  type FlowEdge,
+} from "@/lib/address-flow";
 
 const LAYER_SPACING_X = 280;
 const NODE_SPACING_Y = 120;
@@ -66,29 +78,25 @@ const AddressNode = memo(function AddressNode({
   );
 });
 
-const TxNode = memo(function TxNode({ data }: { data: NodeData }) {
-  const hlClass = isHighlighted(data.raw.id);
-  return (
-    <div
-      role="button"
-      aria-label={`transaction ${data.raw.label ?? data.raw.id}`}
-      onClick={() => data.onSelect(data.raw.id)}
-      className={`rounded-full border border-violet-300 bg-violet-50 px-2 py-1 text-center text-[10px] font-mono text-violet-800 shadow-sm cursor-pointer${hlClass}`}
-      style={{ minWidth: 110 }}
-    >
-      tx {data.raw.label ?? ""}
-    </div>
-  );
-});
+const nodeTypes = { address: AddressNode };
 
-const nodeTypes = { address: AddressNode, transaction: TxNode };
+function flowAmountLabel(e: FlowEdge): string {
+  const outAmt = e.in_btc ?? 0; // 出边：资金离开源地址进入交易（源侧流出额）
+  const inAmt = e.out_btc ?? 0; // 入边：资金进入目标地址（目标侧接收额）
+  if (inAmt > 0 || outAmt > 0) {
+    // 沿 A→B 流向：出(离开A) → 入(进入B)
+    return `出${outAmt.toFixed(4)}→入${inAmt.toFixed(4)}`;
+  }
+  if (e.value_ratio !== undefined) return `${Math.round(e.value_ratio * 100)}%`;
+  return "";
+}
 
 function buildFlow(
-  subgraph: { nodes: GraphNode[]; edges: GraphEdge[] },
+  flow: AddressFlow,
   maxLayer: number | null,
   onSelect: (id: string) => void,
 ): { rfNodes: RFNode[]; rfEdges: RFEdge[] } {
-  const visible = subgraph.nodes.filter(
+  const visible = flow.nodes.filter(
     (n) => maxLayer === null || (n.first_layer ?? 0) <= maxLayer,
   );
   const visibleIds = new Set(visible.map((n) => n.id));
@@ -107,7 +115,7 @@ function buildFlow(
     layerNodes.forEach((n, i) => {
       rfNodes.push({
         id: n.id,
-        type: n.kind === "address" ? "address" : "transaction",
+        type: "address", // 地址流式视图只有 address 节点
         position: {
           x: layer * LAYER_SPACING_X,
           y: i * NODE_SPACING_Y - height / 2,
@@ -119,22 +127,20 @@ function buildFlow(
     });
   });
 
-  const rfEdges: RFEdge[] = subgraph.edges
+  const rfEdges: RFEdge[] = flow.edges
     .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
     .map((e) => {
       const flags: string[] = [];
       if (e.is_crosschain) flags.push(e.op_return_protocol ?? "crosschain"); // FE-15
       if (e.is_stopped_expansion) flags.push("stopped"); // FE-14
+      const amountLabel = flowAmountLabel(e);
+      const label = [amountLabel, flags.join("·")].filter(Boolean).join(" · ");
       return {
         id: e.id,
         source: e.source,
         target: e.target,
         animated: false,
-        label:
-          flags.join("·") ||
-          (e.value_ratio !== undefined
-            ? `${Math.round(e.value_ratio * 100)}%`
-            : undefined),
+        label: label || undefined,
         labelStyle: { fontSize: 9 },
         style: e.is_stopped_expansion
           ? { strokeDasharray: "6 4", stroke: "#94a3b8" }
@@ -169,14 +175,22 @@ export default function GraphCanvas({
     [subgraph, onNodeClick],
   );
 
-  // 仅子图数据或过滤条件变化时重建；highlightIds 不参与（FE-26）
+  // 展示变换：canonical 子图 → 地址节点 + 交易边（含入/出边金额）。
+  // 不直接渲染生成的子图；仅子图或过滤变化时重建（FE-26 高亮不参与）。
+  const flow = useMemo(() => toAddressFlow(subgraph), [subgraph]);
   const { rfNodes, rfEdges } = useMemo(
-    () => buildFlow(subgraph, maxLayer ?? null, handleSelect),
-    [subgraph, maxLayer, handleSelect],
+    () => buildFlow(flow, maxLayer ?? null, handleSelect),
+    [flow, maxLayer, handleSelect],
+  );
+
+  // 证据高亮：canonical id（addr:/tx:/edge:）→ 本视图节点/边 id
+  const displayHighlightIds = useMemo(
+    () => resolveHighlightIds(highlightIds, flow),
+    [highlightIds, flow],
   );
 
   return (
-    <HighlightContext.Provider value={highlightIds}>
+    <HighlightContext.Provider value={displayHighlightIds}>
       <div style={{ width: "100%", height: "100%" }} data-testid="graph-canvas">
         <ReactFlow
           nodes={rfNodes}

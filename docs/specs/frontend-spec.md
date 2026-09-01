@@ -35,20 +35,21 @@ MVP **桌面优先**；移动端仅保证只读浏览（画布禁拖拽、详情
 
 ### GraphCanvas (`components/GraphCanvas.tsx`)
 
-- 基于 React Flow，自定义节点类型：
+- 基于 React Flow，**地址流式展示模型**（address-as-node / tx-as-edge）：画布**不直接渲染**
+  后端返回的 canonical 子图（其中 tx 也是节点），而是经 `lib/address-flow.ts::toAddressFlow()`
+  变换为「仅 address 节点 + 交易作为有向边」的流式图，每条边标注入/出边交易金额：
   - 地址节点：显示标签 / BTC 余额摘要 / script_type
-  - 交易节点：显示金额摘要 / time_delta / fanout_ratio
-  - 混币器节点：特殊样式（红色边框 + ⚠ 图标）
-  - 摘要节点：折叠超扇出，显示 "N more outputs..."
-- 自定义边：
-  - `is_stopped_expansion=true` → 虚线 + 停止图标
-  - `is_crosschain=true` → 桥协议标签
-  - 默认边显示 value_ratio 百分比
-- **证据高亮**：接收 `highlightIds: Set<string>`（D3 ID 规范），用 `useMemo` 派生节点样式，不重建 nodes 数组
+  - 交易 → 有向边（每个输入地址 → 每个输出地址），边上标注
+    **出边金额（源地址流入交易的金额）→ 入边金额（目标地址从交易收到的金额）**
+  - 混币器分支：特殊样式（红色边框 + ⚠ 图标）；摘要节点在流式视图中不渲染（非地址）
+  - 边样式：`is_stopped_expansion` → 虚线 + 停止图标；`is_crosschain` → 桥协议标签
+- **证据高亮**：接收 `highlightIds: Set<string>`（canonical D3 ID），经
+  `lib/address-flow.ts::resolveHighlightIds()` 映射到本视图节点/边 ID（`addr:`→节点、
+  `tx:`→该交易所有边与端点、`edge:`→尽力匹配），用 `useMemo` 派生样式，不重建 nodes 数组
 - 交互：缩放、拖拽、节点点击弹出详情侧栏、按跳数过滤
 - **大图性能配置（200 节点）**：
   - `onlyRenderVisibleElements: true`
-  - 自定义节点全部 `React.memo` 包裹
+  - 地址节点 `React.memo` 包裹
   - 布局算法 dagre（LR 方向）自动排列，禁用 `nodesConnectable`（只读图谱）
   - 初始 `fitView`
 
