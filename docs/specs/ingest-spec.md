@@ -65,10 +65,12 @@ ingest/
 | 标签类型 | 来源 | 存储位置 |
 |---|---|---|
 | 混币器地址 | 公开清单 + Lazarus 项目沉淀 | addresses_meta.labels |
-| CoinJoin 交易 ID | Wasabi / JoinMarket 公开标记 | coinjoin_txids (PostgreSQL table) |
+| CoinJoin 交易 ID | **交易结构级启发式判定**（`backend/detection/coinjoin.py`，无 CSV） | GraphBuilder 运行时按规则判别；`coinjoin_txids` 表为可选显式标记通道 |
 | 跨链 OP_RETURN 协议映射 | Thorchain / 侧链协议公开文档 | crosschain_tx_set |
 
 加载脚本将上述集合从 CSV/JSON 加载到 PostgreSQL，供 graph-builder 启动时读取到内存。
+CoinJoin 的**主判定**已改为启发式规则（见 graph-builder-spec §4），`coinjoin_txids` csv
+不再作为来源（移除 csv 依赖）。
 
 ## 5. Embedding 计算
 

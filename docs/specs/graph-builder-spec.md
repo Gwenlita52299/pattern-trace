@@ -63,7 +63,7 @@ class SubgraphResult:
 |---|---|---|
 | unspent | UTXO 在数据范围内未被花费 | 记录节点状态，不生成出边 |
 | out_of_range | spending tx block_time < seed_block_time − time_window_days*86400（早于窗口起点即停止） | 停止该分支扩展 |
-| early_stop | spending tx ∈ coinjoin_txids 或 crosschain_tx_set | 生成 is_stopped_expansion=true 边，不向交易内部展开 |
+| early_stop | spending tx ∈ coinjoin_txids 或 crosschain_tx_set，或**启发式判定为 CoinJoin** | 生成 is_stopped_expansion=true 边，不向交易内部展开 |
 | tx4_new_dst | depth=3 目标地址此前未见 | 硬停止该分支 |
 | queue_empty | 三队列全部耗尽 | 正常结束 |
 
@@ -71,10 +71,16 @@ class SubgraphResult:
 
 标签表必须包含：
 
-- `coinjoin_txids: set[str]`：已知 CoinJoin / Wasabi / 混币器交易 ID 集合
+- `coinjoin_txids: set[str]`：已知 CoinJoin / Wasabi / 混币器交易 ID 集合（**显式标记通道**，
+  可与启发式判定叠加；该集合已不再从 step1_coinjoin csv 供给）
 - `crosschain_tx_set: dict[str, str]`：跨链 OP_RETURN txid → protocol 映射（e.g. "thorchain"）
 
 这些集合从 PostgreSQL 标签表加载到内存 set/dict。
+
+**CoinJoin 判定（无 CSV 依赖）**：对每条消费交易，若其 txid 不在 `coinjoin_txids` 中，
+GraphBuilder 直接以 `backend/detection/coinjoin.py::CoinJoinDetector` 的启发式规则按交易
+结构判别（扇入扇出宽度 + 等额输出占比 + 输出金额熵 + 输入地址唯一性 + 手续费占比 +
+bech32 占比）；判定通过即记 `is_remixer` 并 early-stop。不再依赖任何外部标记文件。
 
 ## 5. 去重与节点状态
 

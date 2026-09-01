@@ -1,10 +1,13 @@
-"""标签三表加载 — ingest-spec §4 / IG-07。
+"""标签表加载 — ingest-spec §4 / IG-07。
 
-数据源（bybit_rust 基线沉淀，全部为真实数据）：
-- step1_coinjoin/coinjoin_txids.csv        → coinjoin_txids（Wasabi 特征聚类产出）
+数据源：
 - data/op_return_decoded/op_returns_interesting.csv → crosschain_tx_set（txid→协议映射）
   基线口径（step3_sub1_preprocessing）：interesting OP_RETURN 全部计入 crosschain 集合
 - results/step2_label/coinjoin_outputs_labeled.parquet → addresses_meta（coinjoin 产出地址）
+
+配套说明：CoinJoin 交易**不再由外部 csv（step1_coinjoin/coinjoin_txids.csv）供给**，
+改由 backend/detection/coinjoin.py 的启发式规则在 GraphBuilder 阶段直接按交易结构
+判定 `early_stop_wasabi`；本模块不再读取该 csv 文件（移除 csv 依赖）。
 
 CSV 含 NUL 字节，读取前统一剥离。
 """
@@ -16,7 +19,6 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-COINJOIN_CSV = "results/step1_coinjoin/coinjoin_txids.csv"
 OP_RETURN_CSV = "data/op_return_decoded/op_returns_interesting.csv"
 COINJOIN_OUTPUTS_PARQUET = "results/step2_label/coinjoin_outputs_labeled.parquet"
 
@@ -40,16 +42,6 @@ def run(session, base_dir: str | None = None) -> dict[str, int]:
 
     base = Path(base_dir or get_settings().lazarus_data_dir)
     counts: dict[str, int] = {}
-
-    # --- CoinJoin txids ---
-    cj_rows = [
-        {"txid": r["txid"].strip(), "coordinator": "wasabi",
-         "source": "step1_coinjoin"}
-        for r in _read_csv_nul_safe(base / COINJOIN_CSV)
-        if r.get("txid", "").strip()
-    ]
-    counts["coinjoin_txids"] = _upsert(
-        session, _model("CoinjoinTxid"), cj_rows, ["txid"])
 
     # --- crosschain txid→protocol（基线口径：interesting OP_RETURN 全集）---
     seen_pairs: set[tuple[str, str]] = set()
