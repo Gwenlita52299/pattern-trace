@@ -5,14 +5,14 @@ import tracemalloc
 
 from backend.graph_builder.builder import GraphBuilder
 
-from test_builder import MockTx, SEED, make_provider, out
+from test_builder import MockTx, SEED, make_provider, out, vin
 
 
 def _fanout_fixture(n_txs: int) -> dict:
     return {SEED: [
         MockTx(
             txid=f"f{i}",
-            inputs=[out("prev", 0.5)],
+            inputs=[vin(SEED, 0.5, f"u{i}")],
             outputs=[out(f"bc1qfan{i}{'x' * 40}", 0.002)],
             block_time=1700000000.0,
         ) for i in range(n_txs)

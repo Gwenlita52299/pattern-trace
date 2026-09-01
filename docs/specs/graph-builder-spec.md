@@ -8,9 +8,12 @@
 > **实现状态（2026-08-25 校准）**：容错层已接线——live 模式走同步容错 provider
 > （重试退避 / 429 Retry-After / 熔断切备用端点 / Redis L2，与异步 EsploraClient
 > 共享熔断器与缓存键）；unspent 终止依据响应自带 vout spent 状态；out_of_range
-> 由编排层传入 seed_block_time 生效。仍偏离本 spec 的两点：per-layer 裁剪实际为
-> 「每队列条目 50」而非「每层共享 50」；Edge 缺 time_delta/tx_fee_ratio/
-> fanout_ratio 等特征字段（连带 WL 分桶以层深替代）。
+> 由编排层传入 seed_block_time 生效。BFS 三队列元素已与 bybit_rust 基线一致改为
+> **UTXO 元组**（见 §2）：每层的队列元素是 `(utxo_txid, output_index, owner)`，
+> 展开单元是一次 UTXO 消费（spent_by 解析），而非旧实现的「地址节点」。per-layer
+> 裁剪已修正为 spec 的「每层共享 N」而非「每队列条目 N」。
+> 仍偏离本 spec 的一点：Edge 缺 time_delta/tx_fee_ratio/fanout_ratio 等特征字段
+> （连带 WL 分桶以层深替代）。
 
 ## 1. 输入输出
 
@@ -41,11 +44,18 @@ class SubgraphResult:
 
 ## 2. 分层三队列 BFS
 
-- `layer0_queue`: 种子地址 UTXO → 展开产生 tx2 边（depth=1）
-- `layer1_queue`: tx2 输出 → 展开产生 tx3 边（depth=2）
-- `layer2_queue`: tx3 输出 → 展开产生 tx4 边（depth=3）
+- **队列元素 = UTXO 元组** `(utxo_txid, output_index, owner)`，与基线
+  `QueueEntry = (txid, n, block_height, tx_index, address)` 同构
+  （PatternTrace 数据源用 block_time，故省略 block_height/tx_index）。
+  `owner` 是拥有该 UTXO 的地址；展开单元是**一次 UTXO 消费**（spent_by 解析出消费交易）。
+- `layer0_queue`: 种子地址 UTXO → 消费交易产生 tx2 边（depth=1）
+- `layer1_queue`: tx2 输出 → 消费交易产生 tx3 边（depth=2）
+- `layer2_queue`: tx3 输出 → 消费交易产生 tx4 边（depth=3）
 - 最大深度 = hops（默认 3）
 - **快照语义**：每轮处理开始时对队列取快照，展开新条目留待下一轮
+- spent_by 解析：一个 UTXO `(txid, n)` 的消费交易 = 其 owner 交易列表中 input
+  prevout == `(txid, n)` 的那一笔（Esplora vin 自带 prevout txid/vout；fixture
+  由 `FixtureTxProvider._build_spent_by_ledger` 两遍法重建等价账本）。
 
 ## 3. 五类终止条件
 

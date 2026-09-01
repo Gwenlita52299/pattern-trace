@@ -104,6 +104,9 @@ flowchart LR
 
 ### 6.1 分层三队列 BFS
 
+- **队列元素 = UTXO 元组** `(utxo_txid, output_index, owner)`，与基线
+  `QueueEntry` 同构（不是地址节点）；展开单元是一次 UTXO 消费（spent_by 解析），
+  而非旧实现的「地址→全部交易」。
 - `layer0_queue` → tx2 边（depth 1）、`layer1_queue` → tx3 边（depth 2）、`layer2_queue` → tx4 边（depth 3）；
 - 最大深度固定 3 层（与产品"默认 3 跳"一致）；
 - 原实现种子为 CoinJoin final_exit UTXO，产品中根节点为用户输入地址，其余逻辑一致；

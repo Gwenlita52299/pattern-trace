@@ -11,16 +11,15 @@
 - **来源**：§3 表格 unspent 行、§10 测试要点第 1 条
 
 **前置条件**
-- Mock Esplora 返回：种子地址有一笔交易，其 output #0 标记为未花费
+- 种子地址拥有一个 UTXO（某交易输出给它），但没有任何交易消费它（该 UTXO 无 spent_by）
 
 **操作步骤**
 1. 调用 `builder.build(seed_address, hops=1)`
 2. 检查返回的 SubgraphResult
 
 **预期结果**
-- `stats.terminated_unspent == 1`
-- 对应边 `is_stopped_expansion = True`
-- 该分支不再向交易内部展开（无后续节点产生）
+- `stats.unspent == 1`（展开单元 = 该无消费方的 UTXO）
+- 该分支不产生向下展开的边（无 spent_by → 无消费交易 → 无出边）
 
 ---
 
@@ -130,7 +129,8 @@
 
 **预期结果**
 - 地址 A 和 B 各自出现为独立节点
-- 相同地址 A 出现在不同 output_index 时不会因截断碰撞而遗漏任何一个分支
+- 相同地址 A 出现在不同 output_index 时是**两个不同的 UTXO**，各自进入下一层队列；
+  若后续被不同交易分别消费，会产生两条不同的下游分支
 - seen_utxos 中条目数为 3（完整三元组）
 
 ---
@@ -177,14 +177,14 @@
 - **来源**：§8 max_nodes_per_layer=50 默认值
 
 **前置条件**
-- 单层 100 笔交易，builder 设 max_nodes_per_layer=10
+- 单层 100 笔消费交易，builder 设 max_nodes_per_layer=10
 
 **操作步骤**
 1. build hops=1
 
 **预期结果**
-- 本层最多展开 10 笔新交易节点
-- 多余的交易不入本轮队列（也不入下一层）
+- 本层最多展开 10 个新交易节点（**每层共享**预算，而非每队列条目）
+- 超限的消费交易不计入后续队列展开（`truncated_per_layer` 增加）
 
 ---
 
@@ -212,7 +212,7 @@
 - **来源**：§3 queue_empty 行
 
 **前置条件**
-- Mock 种子地址没有任何交易
+- Mock 种子地址没有任何交易（无任何拥有的 UTXO）
 
 **操作步骤**
 1. build hops=3

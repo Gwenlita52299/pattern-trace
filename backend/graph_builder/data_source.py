@@ -8,7 +8,7 @@
   备用端点/Redis 缓存容错层（与 esplora.EsploraClient 共享熔断器与缓存键规范）。
 
 builder 的 provider 契约是同步可调用对象返回 tx 列表
-（.txid/.inputs/.outputs/.block_time/.unspent_outputs，见 builder._process_entry）；
+（.txid/.inputs/.outputs/.block_time/.unspent_outputs，见 builder._spending_tx）；
 EsploraClient（异步+熔断）服务于异步调用方。
 """
 from __future__ import annotations
@@ -29,21 +29,77 @@ class FixtureTxProvider:
         self.seed_addresses: list[str] = data.get("seed_addresses", [])
         self.coinjoin_txids: set[str] = set(data.get("coinjoin_txids", []))
         self.crosschain_tx_set: dict[str, str] = dict(data.get("crosschain_tx_set", {}))
+        self._input_prevouts: dict[str, list[tuple[str, int]]] = {}
+        self._build_spent_by_ledger()
 
     def seed_block_time(self, address: str) -> float | None:
         times = [t.get("block_time") for t in self.txs_by_address.get(address, [])
                  if t.get("block_time") is not None]
         return max(times) if times else None
 
+    # ------------------------------------------------------------------
+    # spent_by 账本：把每个 input 解析成其消费的 UTXO（prev_txid, prev_vout）。
+    #
+    # 基线在 parquet 上用 spent_by_index 预计算 world；(txid, vout) -> spending_txid。
+    # PatternTrace 的 fixture 是确定性 DAG，可在离线按「地址先产出、后消费」的
+    # 两遍法重建等价账本：先登记所有输出为该地址拥有的 UTXO，再为每个 input 弹出
+    # 一个该地址拥有的 UTXO；无父输出（如种子地址的资金来源）则用外部合成 prevout。
+    # 这样 builder 的 _spending_tx 才能匹配到 (owner, utxo) 的消费交易。
+    # ------------------------------------------------------------------
+    def _build_spent_by_ledger(self) -> None:
+        from collections import defaultdict, deque
+
+        # 只有会被展开的消费交易（非 coinjoin / 非 crosschain）的输出才会被 builder
+        # 作为下一层 UTXO 入队；被 early_stop 截断的交易不会产生向下展开的子 UTXO。
+        # 账本必须与 builder 的展开语义一致，否则 `(utxo, owner)` 无法匹配到消费交易。
+        def is_stopped(tx: dict) -> bool:
+            return (tx["txid"] in self.coinjoin_txids
+                    or tx["txid"] in self.crosschain_tx_set)
+
+        received: dict[str, deque[tuple[str, int]]] = defaultdict(deque)
+        tx_by_txid: dict[str, dict] = {}
+        for _addr, txs in self.txs_by_address.items():
+            for tx in txs:
+                txid = tx["txid"]
+                if txid not in tx_by_txid:  # 每个 tx 唯一归属一个消费地址
+                    tx_by_txid[txid] = tx
+                    if is_stopped(tx):
+                        continue  # early_stop 截断：其输出不会作为下一层 UTXO 被消费
+                    for idx, out in enumerate(tx.get("outputs", [])):
+                        received[out.get("address")].append((txid, idx))
+
+        ext_counter: dict[str, int] = defaultdict(int)
+        for _addr, txs in self.txs_by_address.items():
+            for tx in txs:
+                prevs: list[tuple[str, int]] = []
+                for inp in tx.get("inputs", []):
+                    a = inp.get("address")
+                    if a and received[a]:
+                        prevs.append(received[a].popleft())
+                    else:
+                        prevs.append((f"ext-{a}-{ext_counter[a]}", 0))
+                        ext_counter[a] += 1
+                self._input_prevouts[tx["txid"]] = prevs
+
     def __call__(self, address: str) -> list:
-        return [
-            SimpleNamespace(
-                txid=tx["txid"], inputs=tx["inputs"], outputs=tx["outputs"],
+        out_txs = []
+        for tx in self.txs_by_address.get(address, []):
+            txid = tx["txid"]
+            prevouts = self._input_prevouts.get(txid, [])
+            inputs = []
+            for i, inp in enumerate(tx.get("inputs", [])):
+                inp_with_prev = dict(inp)
+                if i < len(prevouts):
+                    prev_txid, prev_vout = prevouts[i]
+                    inp_with_prev["prev_txid"] = prev_txid
+                    inp_with_prev["prev_vout"] = prev_vout
+                inputs.append(inp_with_prev)
+            out_txs.append(SimpleNamespace(
+                txid=txid, inputs=inputs, outputs=tx.get("outputs", []),
                 block_time=tx.get("block_time"),
                 unspent_outputs=set(tx.get("unspent_outputs", [])),
-            )
-            for tx in self.txs_by_address.get(address, [])
-        ]
+            ))
+        return out_txs
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> FixtureTxProvider:
@@ -158,6 +214,9 @@ class LiveEsploraProvider:
             inputs=[{
                 "address": (vin.get("prevout") or {}).get("scriptpubkey_address"),
                 "value": (vin.get("prevout") or {}).get("value", 0) / 1e8,
+                # Esplora 每个 vin 直接携带其消费的 prevout 引用（spent_by 解析用）
+                "prev_txid": vin.get("txid"),
+                "prev_vout": vin.get("vout"),
             } for vin in tx.get("vin", [])],
             outputs=[{
                 "address": vout.get("scriptpubkey_address"),

@@ -207,6 +207,8 @@ POST /api/v1/addresses/analyze
 复用 `btc_aml_forensics`（bybit_rust）Step3 的 BFS 算法语义与特征 Schema。
 
 **分层三队列 BFS**：
+- **队列元素 = UTXO 元组** `(utxo_txid, output_index, owner)`，与基线 `QueueEntry` 同构
+  （不是地址节点）；展开单元是一次 UTXO 消费（spent_by 解析），而非旧实现的「地址→全部交易」。
 - `layer0_queue` → tx2 边（depth 1）、`layer1_queue` → tx3 边（depth 2）、`layer2_queue` → tx4 边（depth 3）
 - 最大深度固定 3 层；每轮对每层队列做快照处理（snapshot 语义）
 
