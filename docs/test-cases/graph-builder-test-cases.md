@@ -511,18 +511,19 @@
 - **优先级**：P1
 - **来源**：issue #3「建议的模块边界」+「补充验收标准」
 
-**领域接口**
+**领域接口（已实现）**
 - provider 提供 `resolve_spending_transaction(txid, vout, owner) -> SpendingResult`，封装
   outspend 判定 + 全量消费交易获取，返回 `spent / spending_txid / spending_vin /
   spending_tx`（并保留 txid/vout/owner/value/address/status 上下文）。
 - GraphBuilder 只依赖该接口（`_spending_tx_domain`），不直接知道 Esplora endpoint。
 - 尚未实现该接口的 provider 退回 `outspend` + `get_tx` 组合，再退回地址扫描。
 
-**事件循环隔离**
-- 编排层用 `asyncio.to_thread` 把同步 Esplora 构建（种子时间窗 + 图构建）隔离到线程池，
-  live 网络请求/重试不阻塞 FastAPI 事件循环。
+**事件循环隔离（暂缓）**
+- 曾用 `asyncio.to_thread` 隔离同步 Esplora 构建到线程池，但在 Python 3.12 +
+  Starlette TestClient 的 `create_task` 后台任务下会令管线卡在 `processing`，故暂回退
+  为同步构建（fixture 构建 ~0.4ms 可忽略阻塞）。live 隔离需要一个不冲突的线程模型。
 
 **验收**
-- [ ] fixture 与 live provider 均实现 `resolve_spending_transaction`，返回语义一致
-- [ ] builder 优先走领域接口；已花 UTXO 正确展开、未花计 unspent、数据源故障计 degraded
-- [ ] live 同步构建隔离到线程池后，心跳/并发任务在构建期间照常运行（事件循环不被阻塞）
+- [x] fixture 与 live provider 均实现 `resolve_spending_transaction`，返回语义一致
+- [x] builder 优先走领域接口；已花 UTXO 正确展开、未花计 unspent、数据源故障计 degraded
+- [ ] live 同步构建隔离到线程池后不阻塞 FastAPI 事件循环（暂缓，需不冲突的线程模型）

@@ -156,9 +156,10 @@ NodeState 字段：
 - 熔断：连续 5 次失败后 circuit breaker 打开 30s，期间快速失败
 - 备用 provider：mempool.space（配置切换）；规模化可自托管 Electrs
 - 部分失败语义：单分支数据获取失败 → 该分支标记 `stats.degraded=true` 并继续其余分支，不整体失败
-- **事件循环隔离（issue #3 补充验收标准）**：live 模式的同步 Esplora 构建
-  （含重试等待）由编排层经 `asyncio.to_thread` 隔离到线程池，不阻塞 FastAPI
-  事件循环（避免单个 Esplora 超时/重试卡住并发分析期间的 healthz / polling）。
+- **事件循环隔离（issue #3 补充验收标准，暂缓）**：live 模式的同步 Esplora 构建（含重试等待）
+  隔离到线程池。实测用 `asyncio.to_thread` 在 Python 3.12 + Starlette TestClient 的
+  `create_task` 后台任务下会令管线卡在 `processing`，故暂回退为同步构建（fixture 构建
+  ~0.4ms 可忽略阻塞）。live 隔离需要一个不冲突的线程模型，另行跟进。
 - 并发预算：Semaphore(10) 仅对自托管端点使用；公共 Blockstream API 降至 5 并发以遵守限速
 
 ## 8. 规模裁剪规则

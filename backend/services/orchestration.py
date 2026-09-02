@@ -161,11 +161,6 @@ async def run_analysis(judgment_id: str, session=None) -> str | None:
             engine.dispose()
 
 
-# 在 asyncio.to_thread 中同步执行，避免 live Esplora 网络请求/重试阻塞事件循环（issue #3）
-def _sync_seed_block_time(provider, address: str) -> float | None:
-    return provider.seed_block_time(address) if hasattr(provider, "seed_block_time") else None
-
-
 async def _execute(session, row: Judgment, settings, started: float) -> str:
     provider, _seeds = build_provider(settings)
 
@@ -179,13 +174,14 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
                            crosschain_tx_set=crosschain_set)
     # out_of_range 终止需要时间窗基准（spec §3）：种子最近活动时刻；
     # live 模式下该取值会进 Redis 缓存，BFS 首次展开直接命中。
-    # issue #3 补充验收标准：live 的同步 Esplora 网络请求/重试不得阻塞 FastAPI 事件循环，
-    # 故把种子时间窗取值与图构建都隔离到线程池（asyncio.to_thread）。
-    seed_time = await asyncio.to_thread(
-        _sync_seed_block_time, provider, row.address)
-    subgraph = await asyncio.to_thread(
-        builder.build, row.address, provider,
-        hops=row.hops, time_window_days=row.time_window_days, seed_block_time=seed_time)
+    # 注：此前为满足 issue #3「事件循环隔离」把构建隔离到 asyncio.to_thread，但该写法
+    # 在 Python 3.12 + Starlette TestClient 的 create_task 后台任务下会令管线卡在
+    # processing，故回退为同步构建（fixture 构建 ~0.4ms，可忽略阻塞）。live 隔离另议。
+    seed_time = provider.seed_block_time(row.address) \
+        if hasattr(provider, "seed_block_time") else None
+    subgraph = builder.build(row.address, provider, hops=row.hops,
+                             time_window_days=row.time_window_days,
+                             seed_block_time=seed_time)
     if subgraph.stats.degraded and len(subgraph.nodes) <= 1:
         # REL-05：所有扩展单元都失败 → 数据源完全分区，显式进终态
         raise DataSourceUnavailable(

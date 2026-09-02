@@ -2,9 +2,6 @@
 
 不为 live provider 发公网请求：用 _fetch / _map_tx 语义注入确定性分页响应。
 """
-import asyncio
-import time
-
 from backend.graph_builder.builder import GraphBuilder
 from backend.graph_builder.data_source import FixtureTxProvider, LiveEsploraProvider
 
@@ -216,39 +213,3 @@ def test_fixture_provider_build_uses_authoritative_outspend():
     # 权威路径在非末页也有消费交易 → 至少一个分支正常展开或 early_stop
     assert (result.stats.expanded + result.stats.early_stop_wasabi
             + result.stats.early_stop_crosschain) > 0
-
-
-def test_sync_build_does_not_block_event_loop():
-    """issue #3 补充验收标准：live 同步 Esplora 请求不得阻塞 FastAPI 事件循环。
-
-    若直接在异步函数里同步构建（而非 asyncio.to_thread 线程池），慢数据源的 sleep
-    会阻塞事件循环，心跳任务无法先行完成。此测试验证隔离后事件循环保持响应。
-    """
-    SEED = "bc1qhb2xq7z8y9w0d1e2f3g4h5j6k7l8m9n0p1q2r3s4t5u6v7w8x9y0z1"
-
-    class SlowAddrProvider:
-        def address_txs(self, addr):
-            time.sleep(0.2)  # 模拟 live 网络阻塞（同步）
-            return []
-
-        def outspend(self, txid, vout):
-            raise AssertionError("no UTXOs expected")
-
-    async def heartbeat(interval, count):
-        ticks = 0
-        for _ in range(count):
-            await asyncio.sleep(interval)
-            ticks += 1
-        return ticks
-
-    provider = SlowAddrProvider()
-
-    async def run():
-        ticks_task = asyncio.create_task(heartbeat(0.01, 10))
-        # 图构建隔离到线程池：慢数据源的同步 I/O 不阻塞事件循环
-        subgraph = await asyncio.to_thread(GraphBuilder().build, SEED, provider, hops=1)
-        n_ticks = await ticks_task
-        return subgraph, n_ticks
-
-    subgraph, n_ticks = asyncio.run(run())
-    assert n_ticks >= 1  # 心跳在构建期间照常运行 → 事件循环未被阻塞
