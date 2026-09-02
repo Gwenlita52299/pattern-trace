@@ -108,8 +108,16 @@ class EsploraClient:
     async def get_address_txs(self, address: str) -> list[dict]:
         return await self._l1(self.base_url, f"/address/{address}/txs")
 
+    async def get_address_txs_chain(self, address: str, last_seen_txid: str) -> list[dict]:
+        """地址交易分页后续页（issue #3 地址模式补全历史输出）。"""
+        return await self._l1(self.base_url, f"/address/{address}/txs/chain/{last_seen_txid}")
+
     async def get_tx(self, txid: str) -> dict:
         return await self._l1(self.base_url, f"/tx/{txid}")
+
+    async def get_outspend(self, txid: str, vout: int) -> dict:
+        """权威 outspend 判定（issue #3：GET /tx/:txid/outspend/:vout）。"""
+        return await self._l1(self.base_url, f"/tx/{txid}/outspend/{vout}")
 
     async def close(self) -> None:
         if self.session is not None:

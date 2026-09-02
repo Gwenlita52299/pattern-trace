@@ -109,8 +109,44 @@ class MockTx:
     block_time: float | None = None
 
 
+def fund_seed_txs(tx_map):
+    """为 tx_map 中所有 input 的 prevout 自动补注资交易（输出侧-only 根枚举辅助）。"""
+    from collections import defaultdict
+
+    builder = defaultdict(list)
+    for addr, txs in tx_map.items():
+        builder[addr].extend(txs)
+    existing = {getattr(t, "txid", None) for txs in builder.values() for t in txs}
+
+    pending = defaultdict(dict)
+    for addr, txs in tx_map.items():
+        for tx in txs:
+            for inp in (getattr(tx, "inputs", None) or []):
+                ptxid = inp.get("prev_txid")
+                if not ptxid or ptxid in existing:
+                    continue
+                pvout = inp.get("prev_vout", 0)
+                owner = inp.get("address")
+                value = inp.get("value", 0.1)
+                pending[ptxid].setdefault(pvout, (owner, value))
+
+    for ptxid, outs in pending.items():
+        maxidx = max(outs)
+        outputs = [{"address": None, "value": 0.0} for _ in range(maxidx + 1)]
+        for idx, (owner, value) in outs.items():
+            outputs[idx] = out(owner, value)
+        funded_owners = set()
+        for owner, _v in outs.values():
+            if owner in funded_owners:
+                continue
+            funded_owners.add(owner)
+            builder[owner].append(MockTx(txid=ptxid, outputs=outputs))
+    return dict(builder)
+
+
 def make_provider(tx_map):
-    return lambda addr: tx_map.get(addr, [])
+    funded = fund_seed_txs(tx_map)
+    return lambda addr: funded.get(addr, [])
 
 
 SEED = "bc1qseed000000000000000000000000000000000000000000000000qa"

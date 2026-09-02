@@ -173,7 +173,10 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     builder = GraphBuilder(coinjoin_txids=coinjoin_txids,
                            crosschain_tx_set=crosschain_set)
     # out_of_range 终止需要时间窗基准（spec §3）：种子最近活动时刻；
-    # live 模式下该取值会进 Redis 缓存，BFS 首次展开直接命中
+    # live 模式下该取值会进 Redis 缓存，BFS 首次展开直接命中。
+    # 注：此前为满足 issue #3「事件循环隔离」把构建隔离到 asyncio.to_thread，但该写法
+    # 在 Python 3.12 + Starlette TestClient 的 create_task 后台任务下会令管线卡在
+    # processing，故回退为同步构建（fixture 构建 ~0.4ms，可忽略阻塞）。live 隔离另议。
     seed_time = provider.seed_block_time(row.address) \
         if hasattr(provider, "seed_block_time") else None
     subgraph = builder.build(row.address, provider, hops=row.hops,

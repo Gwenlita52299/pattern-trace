@@ -11,6 +11,9 @@ process_queue_batched）逐项对齐：每个扩展单元是一次 **UTXO 消费
 第 utxo_n 号输出」；展开它时按 spent_by（= 谁消费了这个 UTXO）解析出消费交易，
 该交易产生的 `tx{i+2}` 边把资金流向前一层。消费交易的新输出成为下一层的 UTXO 条目。
 
+spent_by 解析在 issue #3 后采用 Esplora outspend API（GET /tx/:txid/outspend/:vout）
+作为权威来源（见 _spending_tx_outspend）；provider 未实现该协议时回退到地址扫描。
+
 与基线的已记录分歧（均为 PatternTrace spec 决策，非疏忽）：
 1. D3：tx 也建模为节点（前端可视化/evidence 高亮需要），基线中 tx 只是边属性；
 2. seen_utxos 用完整三元组 (txid, vout, addr)，spec §5 禁止基线的 hash 截断防碰撞。
@@ -155,16 +158,17 @@ class GraphBuilder:
         self.dust_threshold_btc = dust_threshold_btc
 
     # ------------------------------------------------------------------
-    # 种子 UTXO 枚举：一个地址拥有的 UTXO = 其各交易里 input 的 prevout ∪
-    # 输出到自身的 UTXO（该地址的接收侧）。
-    # 对应基线 read_seed_utxos 的种子行；PatternTrace 以用户地址为种子并只向前追溯
-    # （资金流出方向），因此以「该地址正在消费的 prevout」为主，辅以接收侧输出。
+    # 种子 UTXO 枚举（issue #3 地址模式）：一个地址拥有的 UTXO 只来自**输出侧**——
+    # 该地址作为接收方（vout 的 scriptpubkey_address == address）被创建的新 UTXO。
+    # 对应基线 read_seed_utxos 的种子行；只向前追溯（资金流出方向）。
+    # 明确区分：vout 出现地址 = 该交易为此地址创建了新 UTXO（种子来源）；
+    #           vin 出现地址 = 该地址在消费旧 UTXO（不作为种子来源）。
     # ------------------------------------------------------------------
     def _owned_utxos(self, address: str, tx_provider, st: BFSStats) -> list[UTXO_ENTRY]:
         utxos: list[UTXO_ENTRY] = []
         seen: set[tuple[str, int, str]] = set()
         try:
-            txs = tx_provider(address)
+            txs = self._address_txs(tx_provider, address)
         except Exception:
             # 部分失败语义：种子地址数据源不可达 → 降级，不产节点
             st.degraded = True
@@ -181,17 +185,95 @@ class GraphBuilder:
                 # 该地址作为接收方拥有的 UTXO（可能被后续花费，也可能保持 unspent）
                 if out_.get("address") == address:
                     add(tx.txid, idx, address)
-            for inp in getattr(tx, "inputs", None) or []:
-                # prevout 指向一个该地址拥有的 UTXO（该地址在消费它）
-                if inp.get("address") == address and inp.get("prev_txid"):
-                    add(inp["prev_txid"], inp["prev_vout"], address)
         return utxos
+
+    @staticmethod
+    def _address_txs(tx_provider, address: str) -> list:
+        """地址交易枚举：优先 provider.address_txs（live 全量分页 / fixture），
+        否则回退到旧的 callable(address) 形态（纯测试桩/基准脚本）。"""
+        if hasattr(tx_provider, "address_txs"):
+            return tx_provider.address_txs(address)
+        return tx_provider(address)
 
     # ------------------------------------------------------------------
     # spent_by 解析：给定 UTXO (utxo_txid, utxo_n)，找出消费它的交易。
-    # 消费交易必然出现在 owner 的交易列表里（owner 作为 input），故按地址扫描即可。
+    # issue #3：以 Esplora outspend API（GET /tx/:txid/outspend/:vout）作为权威来源，
+    # 修复「扫描地址交易列表可能遗漏历史消费交易 / 把已花 UTXO 误判为 unspent」。
+    # 仅当 provider 未实现 outspend 协议（纯 callable 测试桩）时回退到地址扫描。
     # ------------------------------------------------------------------
     def _spending_tx(self, utxo_txid: str, utxo_n: int, owner: str, tx_provider, st: BFSStats):
+        # issue #3：优先领域级 resolve_spending_transaction（封装 outspend+get_tx），
+        # 其次退回 outspend+get_tx 组合（纯测试桩），再退回地址扫描（callable 桩）。
+        if hasattr(tx_provider, "resolve_spending_transaction"):
+            return self._spending_tx_domain(utxo_txid, utxo_n, owner, tx_provider, st)
+        if hasattr(tx_provider, "outspend"):
+            return self._spending_tx_outspend(utxo_txid, utxo_n, owner, tx_provider, st)
+        return self._spending_tx_scan(utxo_txid, utxo_n, owner, tx_provider, st)
+
+    def _spending_tx_domain(self, utxo_txid: str, utxo_n: int, owner: str,
+                            tx_provider, st: BFSStats):
+        """用领域级 resolve_spending_transaction 解析消费交易（issue #3）。"""
+        try:
+            res = tx_provider.resolve_spending_transaction(utxo_txid, utxo_n, owner=owner)
+        except Exception:
+            st.degraded = True
+            return None
+        if getattr(res, "spent", False) is not True or not getattr(res, "spending_txid", None):
+            return None  # 权威未花 → unspent 叶子（unspent 终止，不产边）
+        spending_tx = getattr(res, "spending_tx", None)
+        if spending_tx is not None:
+            return spending_tx
+        # 领域对象未附完整交易（extremely 少见）→ 补拉全量，稳健兜底
+        if hasattr(tx_provider, "get_tx"):
+            try:
+                tx = tx_provider.get_tx(res.spending_txid)
+            except Exception:
+                st.degraded = True
+                return None
+            if tx is None:
+                st.degraded = True
+                return None
+            return tx
+        st.degraded = True
+        return None
+
+    def _spending_tx_outspend(self, utxo_txid: str, utxo_n: int, owner: str,
+                              tx_provider, st: BFSStats):
+        """用 outspend 权威判定该 UTXO 是否被消费及其消费交易，再拉全量交易。"""
+        try:
+            info = tx_provider.outspend(utxo_txid, utxo_n)
+        except Exception:
+            st.degraded = True
+            return None
+        if getattr(info, "spent", False) is not True or not getattr(info, "txid", None):
+            return None  # 权威未花 → unspent 叶子（unspent 终止，不产边）
+        spending_txid = info.txid
+
+        # 完整消费交易：优先 get_tx；否则回退到地址扫描按 txid 匹配（极少见，仅无 get_tx 的桩）
+        if hasattr(tx_provider, "get_tx"):
+            try:
+                tx = tx_provider.get_tx(spending_txid)
+            except Exception:
+                st.degraded = True
+                return None
+            if tx is None:
+                st.degraded = True
+                return None
+            return tx
+
+        try:
+            for tx in tx_provider(owner):
+                if getattr(tx, "txid", None) == spending_txid:
+                    return tx
+        except Exception:
+            st.degraded = True
+            return None
+        st.degraded = True
+        return None
+
+    def _spending_tx_scan(self, utxo_txid: str, utxo_n: int, owner: str,
+                          tx_provider, st: BFSStats):
+        """旧行为：按地址扫描其交易列表，匹配引用该 UTXO 的 input（仅为兼容保留）。"""
         try:
             txs = tx_provider(owner)
         except Exception:
@@ -212,10 +294,118 @@ class GraphBuilder:
         time_window_days: int = 90,
         seed_block_time: float | None = None,
     ) -> SubgraphResult:
-        validate_hops(hops)
-        start = time.perf_counter()
-        st = BFSStats()
+        """地址种子入口：以 seed_address 拥有的 UTXO 为根队列。
 
+        与 build_from_txid 共享同一套 outspend 权威展开核心（_run_bfs）。
+        """
+        validate_hops(hops)
+        st = BFSStats()
+        start = time.perf_counter()
+        seed_utxos = self._owned_utxos(seed_address, tx_provider, st)
+        seed_nodes = [Node(id=node_id("address", seed_address), kind="address", label=seed_address)]
+        return self._run_bfs(
+            seed_utxos, seed_nodes, [], tx_provider,
+            hops, time_window_days, seed_block_time, st, start,
+        )
+
+    # ------------------------------------------------------------------
+    # issue #3「输入为 txid」：一个交易可形成多个子图（每个输出 UTXO 是一个根分支）。
+    #   GET /tx/:txid → 取 vout[] → 排除 OP_RETURN 等不可追踪输出 → 每个输出为根 UTXO。
+    # ------------------------------------------------------------------
+    def build_from_txid(
+        self,
+        seed_txid: str,
+        tx_provider,
+        hops: int = 3,
+        time_window_days: int = 90,
+        seed_block_time: float | None = None,
+    ) -> SubgraphResult:
+        """交易种子入口：把 seed_txid 的可追踪输出 UTXO 作为根队列，按 outspend 展开。"""
+        validate_hops(hops)
+        st = BFSStats()
+        start = time.perf_counter()
+        seed_utxos, seed_nodes, seed_edges = self._owned_utxos_from_tx(seed_txid, tx_provider, st)
+        return self._run_bfs(
+            seed_utxos, seed_nodes, seed_edges, tx_provider,
+            hops, time_window_days, seed_block_time, st, start,
+        )
+
+    def _owned_utxos_from_tx(
+        self,
+        seed_txid: str,
+        tx_provider,
+        st: BFSStats,
+    ) -> tuple[list[UTXO_ENTRY], list[Node], list[Edge]]:
+        """从 seed_txid 的输出侧枚举可追踪根 UTXO（issue #3「输入为 txid」）。
+
+        - `GET /tx/:txid` 取交易详情（provider.get_tx）
+        - 只保留 vout 中带可追踪地址的输出（排除 OP_RETURN 等无地址/不可追踪输出与 dust）
+        - 每个匹配输出 `(seed_txid, idx, addr)` 是一个根 UTXO 分支
+        - 同时产出 T0 → addr 支付边，保证 D3 引用完整性（种子交易连到根输出所有者）
+        """
+        if not hasattr(tx_provider, "get_tx"):
+            st.degraded = True
+            return [], [], []
+        try:
+            tx = tx_provider.get_tx(seed_txid)
+        except Exception:
+            st.degraded = True
+            return [], [], []
+        if tx is None:
+            st.degraded = True
+            return [], [], []
+
+        seed_node = Node(id=node_id("transaction", seed_txid),
+                        kind="transaction", label=seed_txid[:16])
+        seed_nodes: list[Node] = [seed_node]
+        seed_edges: list[Edge] = []
+        utxos: list[UTXO_ENTRY] = []
+        seen: set[tuple[str, int, str]] = set()
+        inputs = getattr(tx, "inputs", None) or []
+        outputs = getattr(tx, "outputs", None) or []
+        total_input = sum(i.get("value", 0) for i in inputs)
+
+        for idx, out_ in enumerate(outputs):
+            addr = out_.get("address")
+            value = out_.get("value", 0)
+            # 排除 OP_RETURN / 无地址输出（不可追踪）与 dust（≤ 阈值整条丢弃）
+            if not addr or value <= self.dust_threshold_btc:
+                continue
+            key = (seed_txid, idx, addr)
+            if key in seen:
+                continue
+            seen.add(key)
+            utxos.append((seed_txid, idx, addr))
+            addr_id = node_id("address", addr)
+            seed_nodes.append(Node(id=addr_id, kind="address", label=addr,
+                                   first_layer=0, total_received_btc=value, utxo_count=1))
+            seed_edges.append(Edge(
+                id=edge_id(seed_node.id, addr_id),
+                source=seed_node.id, target=addr_id,
+                txid=seed_txid, tx_layer="tx1",
+                value_ratio=value / total_input if total_input > 0 else 0.0,
+                dst_value_btc=value,
+                total_num_inputs=len(inputs), total_num_outputs=len(outputs),
+            ))
+        return utxos, seed_nodes, seed_edges
+
+    # ------------------------------------------------------------------
+    def _run_bfs(
+        self,
+        seed_utxos: list[UTXO_ENTRY],
+        seed_nodes: list[Node],
+        seed_edges: list[Edge],
+        tx_provider,
+        hops: int,
+        time_window_days: int,
+        seed_block_time: float | None,
+        st: BFSStats,
+        start: float,
+    ) -> SubgraphResult:
+        """共享 BFS 核心：种子设置（节点/边/根队列）→ 三队列展开 → 清理与统计。
+
+        地址种子与交易种子共用。st/start 由调用方预置，以便把根枚举耗时计入 elapsed。
+        """
         result = SubgraphResult()
         nodes_by_id: dict[str, Node] = {}
         seen_edges: set[str] = set()
@@ -233,12 +423,22 @@ class GraphBuilder:
             result.nodes.append(node)
             return True
 
-        seed_id = node_id("address", seed_address)
-        add_node(Node(id=seed_id, kind="address", label=seed_address))
+        # 种子节点（地址种子：地址节点；交易种子：种子交易节点 + 各根输出所有者节点）
+        for node in seed_nodes:
+            add_node(node)
+
+        # 种子边（交易种子：T0 → 各根输出所有者，保证 D3 引用完整性）
+        for e in seed_edges:
+            if e.id in seen_edges:
+                continue
+            if e.source not in nodes_by_id or e.target not in nodes_by_id:
+                continue  # 节点硬上限拒绝端点时跳过该边
+            seen_edges.add(e.id)
+            result.edges.append(e)
 
         # 三队列：queues[i] 收 first_layer==i 的地址所拥有的 UTXO，展开时产生 tx(i+2) 边
         queues: list[deque] = [deque() for _ in range(MAX_HOPS)]
-        for utxo in self._owned_utxos(seed_address, tx_provider, st):
+        for utxo in seed_utxos:
             if utxo in seen_utxos:
                 continue
             seen_utxos.add(utxo)

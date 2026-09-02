@@ -12,6 +12,9 @@
 > **UTXO 元组**（见 §2）：每层的队列元素是 `(utxo_txid, output_index, owner)`，
 > 展开单元是一次 UTXO 消费（spent_by 解析），而非旧实现的「地址节点」。per-layer
 > 裁剪已修正为 spec 的「每层共享 N」而非「每队列条目 N」。
+> **issue #3（已修复）**：spent_by 以 Esplora `outspend` API 为权威来源，地址交易
+> 枚举经 `/txs` + `/txs/chain` 全量分页，二者消除「扫描地址列表可能遗漏历史消费
+> 交易 / 把已花 UTXO 误判为 unspent」的问题。
 > 仍偏离本 spec 的一点：Edge 缺 time_delta/tx_fee_ratio/fanout_ratio 等特征字段
 > （连带 WL 分桶以层深替代）。
 
@@ -28,6 +31,12 @@ class GraphBuilderInput:
     max_nodes_per_layer: int = 50
     max_total_nodes: int = 200
 ```
+
+**两种种子模式（issue #3 统一模型）**：
+- `build(seed_address, ...)`：以地址为种子——枚举其拥有的 UTXO 作为根队列。
+- `build_from_txid(seed_txid, ...)`：以交易为种子——`GET /tx/:seed_txid` 取 `vout[]`，
+  排除 OP_RETURN/dust 等不可追踪输出，每个可追踪输出 `(seed_txid, idx, addr)` 为一个
+  根分支（一个交易可形成多个子图），并按同一套 outspend 权威逻辑展开。
 
 ### 输出
 
@@ -53,9 +62,11 @@ class SubgraphResult:
 - `layer2_queue`: tx3 输出 → 消费交易产生 tx4 边（depth=3）
 - 最大深度 = hops（默认 3）
 - **快照语义**：每轮处理开始时对队列取快照，展开新条目留待下一轮
-- spent_by 解析：一个 UTXO `(txid, n)` 的消费交易 = 其 owner 交易列表中 input
-  prevout == `(txid, n)` 的那一笔（Esplora vin 自带 prevout txid/vout；fixture
-  由 `FixtureTxProvider._build_spent_by_ledger` 两遍法重建等价账本）。
+- spent_by 解析（issue #3 修订后）：一个 UTXO `(txid, n)` 是否/被谁消费以 Esplora
+  `GET /tx/:txid/outspend/:n` 为**权威来源**（`spent=false` → unspent 叶子；`spent=true`
+  → 得 `spending_txid`，再 `GET /tx/:spending_txid` 拉全量消费交易）。仅当 provider 未实现
+  outspend 协议（纯 callable 测试桩）时回退到「扫描 owner 地址交易列表匹配 prevout」；
+  fixture 由 `FixtureTxProvider` 重建等价 `spent_by` 账本以对齐该语义。
 
 ## 3. 五类终止条件
 
@@ -125,8 +136,14 @@ NodeState 字段：
 
 - Base URL: `https://blockstream.info/api`
 - 关键接口：
-  - `GET /address/{addr}/txs` → 地址最近交易列表
+  - `GET /address/{addr}/txs` → 地址交易首页；`GET /address/{addr}/txs/chain/{last_seen_txid}` → 分页续页
   - `GET /tx/{txid}` → 单笔交易详情（inputs/outputs）
+  - `GET /tx/{txid}/outspend/{vout}` → 权威 outspend 判定（issue #3：spent_by 主依据）
+- **领域级接口（issue #3「建议的模块边界」）**：provider 提供
+  `resolve_spending_transaction(txid, vout, owner) -> SpendingResult`，内部封装
+  outspend 判定 + 全量消费交易获取，返回 `spent / spending_txid / spending_vin /
+  spending_tx`（并保留 txid/vout/owner/value/address/status 上下文）。GraphBuilder
+  只依赖该接口，不直接知道 Esplora endpoint。
 - 并发控制：`asyncio.Semaphore(10)` 同时最多 10 个 HTTP 请求
 - 缓存策略：
   - **`async-lru`**（`lru_cache` 不支持协程，禁止使用）maxsize=2048 缓存 tx 详情，key 含 Esplora base URL
@@ -139,6 +156,10 @@ NodeState 字段：
 - 熔断：连续 5 次失败后 circuit breaker 打开 30s，期间快速失败
 - 备用 provider：mempool.space（配置切换）；规模化可自托管 Electrs
 - 部分失败语义：单分支数据获取失败 → 该分支标记 `stats.degraded=true` 并继续其余分支，不整体失败
+- **事件循环隔离（issue #3 补充验收标准，暂缓）**：live 模式的同步 Esplora 构建（含重试等待）
+  隔离到线程池。实测用 `asyncio.to_thread` 在 Python 3.12 + Starlette TestClient 的
+  `create_task` 后台任务下会令管线卡在 `processing`，故暂回退为同步构建（fixture 构建
+  ~0.4ms 可忽略阻塞）。live 隔离需要一个不冲突的线程模型，另行跟进。
 - 并发预算：Semaphore(10) 仅对自托管端点使用；公共 Blockstream API 降至 5 并发以遵守限速
 
 ## 8. 规模裁剪规则

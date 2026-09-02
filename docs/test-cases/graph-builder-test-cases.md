@@ -447,3 +447,83 @@
 **预期结果**
 - 输出耗时对比表（非在线延迟指标）
 - 结论仅用于批量离线分析决策，不驱动在线查询优化
+
+---
+
+## GB-25 outspend 权威 spent_by——修复 issue #3
+
+- **优先级**：P1
+- **来源**：issue #3「use outspend API as the authoritative UTXO expansion model」
+
+**背景**
+旧实现以「扫描 owner 地址交易列表里的 input prevout」来解析消费交易，存在分页遗漏、
+重复扫描、语义混淆、以及「找不到消费交易时把已花 UTXO 误判为 unspent」等风险。
+
+**目标模型**
+`(txid, vout, owner) → GET /tx/:txid/outspend/:vout`：
+- `spent=false` → unspent 叶子（不产边）
+- `spent=true` → 得 `spending_txid`，再 `GET /tx/:spending_txid` 拉全量消费交易
+- 之后仍按 CoinJoin / crosschain / 时间窗口判定，并遍历其输出生成下一层 UTXO
+
+**前置条件**
+- provider 实现 outspend 协议（`address_txs` / `outspend` / `get_tx`）
+- live：`LiveEsploraProvider`；fixture：`FixtureTxProvider`（均实现该协议）
+
+**操作步骤**
+1. 构造「消费交易不在 owner 地址交易列表页内」的图（模拟分页遗漏）
+2. `builder.build(seed_address, provider, ...)`
+
+**预期结果**
+- 已花 UTXO 不再被误判为 `unspent`（`stats.unspent == 0`）
+- 消费交易被权威解析，`tx:<spending_txid>` 与下游地址节点正常产出
+- 地址交易枚举经 `/txs` + `/txs/chain/:last_seen_txid` 全量分页补全历史输出
+- provider 未实现 outspend 协议时回退到地址扫描（兼容纯 callable 测试桩）
+
+---
+
+## GB-26 输入为 txid——交易种子根 UTXO（issue #3）
+
+- **优先级**：P1
+- **来源**：issue #3「输入为 txid」小节
+
+**目标模型**
+`build_from_txid(seed_txid)`：`GET /tx/:seed_txid` → 取 `vout[]` →
+排除 OP_RETURN/dust 等不可追踪输出 → 每个可追踪输出 `(seed_txid, idx, addr)` 为一个
+根分支（一个交易可形成多个子图），按同一套 outspend 权威逻辑展开。
+
+**前置条件**
+- provider 实现 `get_tx`（取交易详情）与 `outspend`（权威消费判定）协议
+
+**操作步骤**
+1. 为种子交易提供含多个输出（含 OP_RETURN / dust 干扰项）的交易
+2. 对每个可追踪输出构造后续消费/未花场景
+
+**预期结果**
+- 无地址（OP_RETURN）与 dust 输出不成为根 UTXO
+- 未花输出 → `unspent` 叶子；已花输出 → 经 outspend 解析消费交易并展开
+- 种子交易节点与各根输出地址节点、`T0 → addr` 支付边具象化子图起点，边端点均在节点集内（D3）
+- `get_tx` 数据源不可达 → `stats.degraded == true`（部分失败语义）
+
+---
+
+## GB-27 领域接口 + 事件循环隔离（issue #3 补充验收标准）
+
+- **优先级**：P1
+- **来源**：issue #3「建议的模块边界」+「补充验收标准」
+
+**领域接口（已实现）**
+- provider 提供 `resolve_spending_transaction(txid, vout, owner) -> SpendingResult`，封装
+  outspend 判定 + 全量消费交易获取，返回 `spent / spending_txid / spending_vin /
+  spending_tx`（并保留 txid/vout/owner/value/address/status 上下文）。
+- GraphBuilder 只依赖该接口（`_spending_tx_domain`），不直接知道 Esplora endpoint。
+- 尚未实现该接口的 provider 退回 `outspend` + `get_tx` 组合，再退回地址扫描。
+
+**事件循环隔离（暂缓）**
+- 曾用 `asyncio.to_thread` 隔离同步 Esplora 构建到线程池，但在 Python 3.12 +
+  Starlette TestClient 的 `create_task` 后台任务下会令管线卡在 `processing`，故暂回退
+  为同步构建（fixture 构建 ~0.4ms 可忽略阻塞）。live 隔离需要一个不冲突的线程模型。
+
+**验收**
+- [x] fixture 与 live provider 均实现 `resolve_spending_transaction`，返回语义一致
+- [x] builder 优先走领域接口；已花 UTXO 正确展开、未花计 unspent、数据源故障计 degraded
+- [ ] live 同步构建隔离到线程池后不阻塞 FastAPI 事件循环（暂缓，需不冲突的线程模型）

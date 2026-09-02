@@ -272,3 +272,41 @@ class TestRedisSecondLevelCache:
             assert len(session.urls) == 1               # 第二次未发 HTTP（L2 命中）
 
         run(flow())
+
+
+# ---------------------------------------------------------------------------
+# issue #3 · outspend / 分页链 接口路径
+# ---------------------------------------------------------------------------
+class TestOutspendAndPaginationEndpoints:
+    def test_get_outspend_uses_outspend_path(self):
+        session = FakeSession([FakeResponse(payload={"spent": True, "txid": "t1", "vin": {}})])
+        client = EsploraClient(session=session, fallback_url=None)
+
+        async def flow():
+            return await client.get_outspend("t1", 0)
+
+        info = run(flow())
+        assert info == {"spent": True, "txid": "t1", "vin": {}}
+        assert session.urls == ["https://blockstream.info/api/tx/t1/outspend/0"]
+
+    def test_get_outspend_unspent_payload(self):
+        session = FakeSession([FakeResponse(payload={"spent": False, "txid": None, "vin": None})])
+        client = EsploraClient(session=session, fallback_url=None)
+
+        async def flow():
+            return await client.get_outspend("t1", 0)
+
+        info = run(flow())
+        assert info["spent"] is False
+        assert info["txid"] is None
+
+    def test_get_address_txs_chain_uses_chain_path(self):
+        session = FakeSession([FakeResponse(payload=[{"txid": "x"}])])
+        client = EsploraClient(session=session, fallback_url=None)
+
+        async def flow():
+            return await client.get_address_txs_chain("bc1qabc", "last_txid")
+
+        data = run(flow())
+        assert data == [{"txid": "x"}]
+        assert session.urls == ["https://blockstream.info/api/address/bc1qabc/txs/chain/last_txid"]
