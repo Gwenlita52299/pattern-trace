@@ -293,7 +293,9 @@ class LiveEsploraProvider:
                 "address": vout.get("scriptpubkey_address"),
                 "value": vout.get("value", 0) / 1e8,
             } for vout in tx.get("vout", [])],
-            block_time=tx.get("block_time"),
+            # Esplora 区块时间在 status.block_time；未确认交易无该字段 → None。
+            # 兜底兼容部分 provider 在顶层携带 block_time 的形态。
+            block_time=(tx.get("status") or {}).get("block_time") or tx.get("block_time"),
             # Esplora 响应自带每个 vout 的 spent 状态：未花输出即 unspent 终止依据
             unspent_outputs={
                 f"{tx['txid']}:{i}" for i, v in enumerate(tx.get("vout", []))

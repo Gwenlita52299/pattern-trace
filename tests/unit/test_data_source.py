@@ -98,6 +98,30 @@ def test_live_provider_get_tx_maps_to_namespace():
     assert tx.block_time == 1700000000.0
 
 
+def test_live_provider_reads_status_block_time_from_esplora():
+    """Esplora 区块时间位于 status.block_time（未确认交易无该字段 → None）。"""
+    p = LiveEsploraProvider("https://mempool.space/api")
+    p._fetch = lambda path: {
+        "/tx/confirmed": {
+            "txid": "confirmed",
+            "vin": [],
+            "vout": [{"scriptpubkey_address": "bc1qdst", "value": 1,
+                      "status": {"spent": True}}],
+            "status": {"confirmed": True, "block_height": 800000, "block_time": 1700000100.0},
+        },
+        "/tx/mempool": {
+            "txid": "mempool",
+            "vin": [],
+            "vout": [{"scriptpubkey_address": "bc1qdst", "value": 1,
+                      "status": {"spent": False}}],
+            "status": {"confirmed": False},
+        },
+    }[path]
+
+    assert p.get_tx("confirmed").block_time == 1700000100.0
+    assert p.get_tx("mempool").block_time is None  # 未确认交易无区块时间
+
+
 # ---------------------------------------------------------------------------
 # Fixture outspend / get_tx 语义
 # ---------------------------------------------------------------------------
