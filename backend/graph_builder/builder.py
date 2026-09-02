@@ -11,6 +11,9 @@ process_queue_batched）逐项对齐：每个扩展单元是一次 **UTXO 消费
 第 utxo_n 号输出」；展开它时按 spent_by（= 谁消费了这个 UTXO）解析出消费交易，
 该交易产生的 `tx{i+2}` 边把资金流向前一层。消费交易的新输出成为下一层的 UTXO 条目。
 
+spent_by 解析在 issue #3 后采用 Esplora outspend API（GET /tx/:txid/outspend/:vout）
+作为权威来源（见 _spending_tx_outspend）；provider 未实现该协议时回退到地址扫描。
+
 与基线的已记录分歧（均为 PatternTrace spec 决策，非疏忽）：
 1. D3：tx 也建模为节点（前端可视化/evidence 高亮需要），基线中 tx 只是边属性；
 2. seen_utxos 用完整三元组 (txid, vout, addr)，spec §5 禁止基线的 hash 截断防碰撞。
@@ -164,7 +167,7 @@ class GraphBuilder:
         utxos: list[UTXO_ENTRY] = []
         seen: set[tuple[str, int, str]] = set()
         try:
-            txs = tx_provider(address)
+            txs = self._address_txs(tx_provider, address)
         except Exception:
             # 部分失败语义：种子地址数据源不可达 → 降级，不产节点
             st.degraded = True
@@ -187,11 +190,62 @@ class GraphBuilder:
                     add(inp["prev_txid"], inp["prev_vout"], address)
         return utxos
 
+    @staticmethod
+    def _address_txs(tx_provider, address: str) -> list:
+        """地址交易枚举：优先 provider.address_txs（live 全量分页 / fixture），
+        否则回退到旧的 callable(address) 形态（纯测试桩/基准脚本）。"""
+        if hasattr(tx_provider, "address_txs"):
+            return tx_provider.address_txs(address)
+        return tx_provider(address)
+
     # ------------------------------------------------------------------
     # spent_by 解析：给定 UTXO (utxo_txid, utxo_n)，找出消费它的交易。
-    # 消费交易必然出现在 owner 的交易列表里（owner 作为 input），故按地址扫描即可。
+    # issue #3：以 Esplora outspend API（GET /tx/:txid/outspend/:vout）作为权威来源，
+    # 修复「扫描地址交易列表可能遗漏历史消费交易 / 把已花 UTXO 误判为 unspent」。
+    # 仅当 provider 未实现 outspend 协议（纯 callable 测试桩）时回退到地址扫描。
     # ------------------------------------------------------------------
     def _spending_tx(self, utxo_txid: str, utxo_n: int, owner: str, tx_provider, st: BFSStats):
+        if hasattr(tx_provider, "outspend"):
+            return self._spending_tx_outspend(utxo_txid, utxo_n, owner, tx_provider, st)
+        return self._spending_tx_scan(utxo_txid, utxo_n, owner, tx_provider, st)
+
+    def _spending_tx_outspend(self, utxo_txid: str, utxo_n: int, owner: str,
+                              tx_provider, st: BFSStats):
+        """用 outspend 权威判定该 UTXO 是否被消费及其消费交易，再拉全量交易。"""
+        try:
+            info = tx_provider.outspend(utxo_txid, utxo_n)
+        except Exception:
+            st.degraded = True
+            return None
+        if getattr(info, "spent", False) is not True or not getattr(info, "txid", None):
+            return None  # 权威未花 → unspent 叶子（unspent 终止，不产边）
+        spending_txid = info.txid
+
+        # 完整消费交易：优先 get_tx；否则回退到地址扫描按 txid 匹配（极少见，仅无 get_tx 的桩）
+        if hasattr(tx_provider, "get_tx"):
+            try:
+                tx = tx_provider.get_tx(spending_txid)
+            except Exception:
+                st.degraded = True
+                return None
+            if tx is None:
+                st.degraded = True
+                return None
+            return tx
+
+        try:
+            for tx in tx_provider(owner):
+                if getattr(tx, "txid", None) == spending_txid:
+                    return tx
+        except Exception:
+            st.degraded = True
+            return None
+        st.degraded = True
+        return None
+
+    def _spending_tx_scan(self, utxo_txid: str, utxo_n: int, owner: str,
+                          tx_provider, st: BFSStats):
+        """旧行为：按地址扫描其交易列表，匹配引用该 UTXO 的 input（仅为兼容保留）。"""
         try:
             txs = tx_provider(owner)
         except Exception:

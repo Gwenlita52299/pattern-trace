@@ -12,6 +12,9 @@
 > **UTXO 元组**（见 §2）：每层的队列元素是 `(utxo_txid, output_index, owner)`，
 > 展开单元是一次 UTXO 消费（spent_by 解析），而非旧实现的「地址节点」。per-layer
 > 裁剪已修正为 spec 的「每层共享 N」而非「每队列条目 N」。
+> **issue #3（已修复）**：spent_by 以 Esplora `outspend` API 为权威来源，地址交易
+> 枚举经 `/txs` + `/txs/chain` 全量分页，二者消除「扫描地址列表可能遗漏历史消费
+> 交易 / 把已花 UTXO 误判为 unspent」的问题。
 > 仍偏离本 spec 的一点：Edge 缺 time_delta/tx_fee_ratio/fanout_ratio 等特征字段
 > （连带 WL 分桶以层深替代）。
 
@@ -53,9 +56,11 @@ class SubgraphResult:
 - `layer2_queue`: tx3 输出 → 消费交易产生 tx4 边（depth=3）
 - 最大深度 = hops（默认 3）
 - **快照语义**：每轮处理开始时对队列取快照，展开新条目留待下一轮
-- spent_by 解析：一个 UTXO `(txid, n)` 的消费交易 = 其 owner 交易列表中 input
-  prevout == `(txid, n)` 的那一笔（Esplora vin 自带 prevout txid/vout；fixture
-  由 `FixtureTxProvider._build_spent_by_ledger` 两遍法重建等价账本）。
+- spent_by 解析（issue #3 修订后）：一个 UTXO `(txid, n)` 是否/被谁消费以 Esplora
+  `GET /tx/:txid/outspend/:n` 为**权威来源**（`spent=false` → unspent 叶子；`spent=true`
+  → 得 `spending_txid`，再 `GET /tx/:spending_txid` 拉全量消费交易）。仅当 provider 未实现
+  outspend 协议（纯 callable 测试桩）时回退到「扫描 owner 地址交易列表匹配 prevout」；
+  fixture 由 `FixtureTxProvider` 重建等价 `spent_by` 账本以对齐该语义。
 
 ## 3. 五类终止条件
 
@@ -125,8 +130,9 @@ NodeState 字段：
 
 - Base URL: `https://blockstream.info/api`
 - 关键接口：
-  - `GET /address/{addr}/txs` → 地址最近交易列表
+  - `GET /address/{addr}/txs` → 地址交易首页；`GET /address/{addr}/txs/chain/{last_seen_txid}` → 分页续页
   - `GET /tx/{txid}` → 单笔交易详情（inputs/outputs）
+  - `GET /tx/{txid}/outspend/{vout}` → 权威 outspend 判定（issue #3：spent_by 主依据）
 - 并发控制：`asyncio.Semaphore(10)` 同时最多 10 个 HTTP 请求
 - 缓存策略：
   - **`async-lru`**（`lru_cache` 不支持协程，禁止使用）maxsize=2048 缓存 tx 详情，key 含 Esplora base URL

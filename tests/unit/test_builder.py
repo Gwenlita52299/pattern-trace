@@ -7,6 +7,7 @@
 early_stop_crosschain / expanded / tx4_new_dst_hard_stop）。
 """
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import pytest
 
@@ -40,6 +41,141 @@ def vin(addr: str, value: float, prev_txid: str, prev_vout: int = 0) -> dict:
 
 def make_provider(tx_map: dict):
     return lambda addr: tx_map.get(addr, [])
+
+
+class OutspendProvider:
+    """最小 outspend 协议桩（issue #3 权威路径）：address_txs / outspend / get_tx。
+
+    模拟 live 模式下「消费交易可能不在 owner 地址交易列表页内」的真实场景，
+    用于验证 builder 以 outspend 作为 spent_by 权威来源而非地址扫描。
+    """
+
+    def __init__(self, tx_map, spent_by: dict, txs_by_id: dict):
+        self.tx_map = tx_map          # addr -> [MockTx]
+        self.spent_by = spent_by      # (txid, vout) -> spending_txid
+        self.txs_by_id = txs_by_id    # txid -> MockTx（完整交易）
+
+    def address_txs(self, addr):
+        return self.tx_map.get(addr, [])
+
+    def outspend(self, txid, vout):
+        spender = self.spent_by.get((txid, vout))
+        if spender is None:
+            return SimpleNamespace(spent=False, txid=None, vin=None)
+        return SimpleNamespace(spent=True, txid=spender, vin={"txid": txid, "vout": vout})
+
+    def get_tx(self, txid):
+        return self.txs_by_id.get(txid)
+
+
+# ---------------------------------------------------------------------------
+# GB-25 · issue #3：outspend 权威 spent_by（地址扫描会被分页遗漏 → 误判 unspent）
+# ---------------------------------------------------------------------------
+class TestOutspendAuthoritativeSpentBy:
+    def test_outspend_unspent_leaf(self):
+        """outspend 权威返回 spent=false → unspent 叶子，不产边。"""
+        funding = MockTx(txid="tx_fund", outputs=[out(SEED, 0.5)])
+        provider = OutspendProvider({SEED: [funding]}, {}, {"tx_fund": funding})
+        result = GraphBuilder().build(SEED, provider, hops=1)
+        assert result.stats.unspent == 1
+        assert result.edges == []
+
+    def test_outspend_spent_uses_get_tx_to_expand(self):
+        """outspend spent=true → get_tx 取全量消费交易 → 正常展开（bc1qnew 入队下一层）。"""
+        spender = MockTx(txid="sp1", inputs=[vin(SEED, 0.5, "u1")],
+                         outputs=[out("bc1qnew")], block_time=1700000000.0)
+        provider = OutspendProvider({SEED: [spender]}, {("u1", 0): "sp1"}, {"sp1": spender})
+        result = GraphBuilder().build(SEED, provider, hops=2)
+        # 种子 UTXO 被权威解析为 spent（expanded），而非误判为 unspent；
+        # bc1qnew 叶子在下一层正常计入 unspent，属正确语义。
+        assert result.stats.expanded == 1
+        assert node_id("transaction", "sp1") in result.node_ids()
+        assert node_id("address", "bc1qnew") in result.node_ids()
+
+    def test_spending_tx_missed_by_page_is_resolved_via_outspend(self):
+        """核心回归：消费交易不在 owner 地址交易页内，旧地址扫描会误判 unspent。
+
+        outspend 按 (txid, vout) 权威返回消费交易，get_tx 补齐全量 → 不再丢失分支。
+        hops=1 下该消费交易被正确解析并展开（tx4 硬停止），而非误判为 unspent。
+        """
+        # SEED 拥有 (tx_fund, 0)；消费交易 sp_offpage 不在 address_txs(SEED) 返回页内
+        funding = MockTx(txid="tx_fund", outputs=[out(SEED, 0.5)])
+        spender = MockTx(txid="sp_offpage",
+                         inputs=[vin(SEED, 0.5, "tx_fund", 0)],  # 消费 (tx_fund, 0)
+                         outputs=[out("bc1qnew")], block_time=1700000000.0)
+        provider = OutspendProvider(
+            tx_map={SEED: [funding]},          # 页内无 sp_offpage（模拟分页遗漏）
+            spent_by={("tx_fund", 0): "sp_offpage"},
+            txs_by_id={"sp_offpage": spender},
+        )
+        result = GraphBuilder().build(SEED, provider, hops=1)
+        assert result.stats.unspent == 0            # 不再把已花 UTXO 误判为 unspent
+        assert node_id("transaction", "sp_offpage") in result.node_ids()
+        assert node_id("address", "bc1qnew") in result.node_ids()
+
+    def test_outspend_failure_degrades(self):
+        """outspend 数据源异常 → 部分失败语义：degraded 置位（不整体失败）。"""
+        spender = MockTx(txid="sp1", inputs=[vin(SEED, 0.5, "u1")],
+                         outputs=[out("bc1qnew")])
+
+        class FailOutspend(OutspendProvider):
+            def outspend(self, txid, vout):
+                raise ConnectionError("esplora unreachable")
+
+        provider = FailOutspend({SEED: [spender]}, {("u1", 0): "sp1"}, {"sp1": spender})
+        result = GraphBuilder().build(SEED, provider, hops=1)
+        assert result.stats.degraded is True
+
+    def test_outspend_get_tx_failure_degrades(self):
+        """outspend 已判 spent 但 get_tx 取全量失败 → 部分失败（degraded 置位）。"""
+        spender = MockTx(txid="sp1", inputs=[vin(SEED, 0.5, "u1")],
+                         outputs=[out("bc1qnew")])
+
+        class FailGetTx(OutspendProvider):
+            def get_tx(self, txid):
+                raise ConnectionError("esplora unreachable")
+
+        provider = FailGetTx({SEED: [spender]}, {("u1", 0): "sp1"}, {"sp1": spender})
+        result = GraphBuilder().build(SEED, provider, hops=1)
+        assert result.stats.degraded is True
+
+    def test_outspend_without_get_tx_falls_back_to_owner_scan(self):
+        """极少数无 get_tx 的桩：outspend 给消费 txid 后，回退到 owner 交易列表按 txid 匹配。"""
+        spender = MockTx(txid="sp1", inputs=[vin(SEED, 0.5, "u1")],
+                         outputs=[out("bc1qnew")], block_time=1700000000.0)
+
+        class OutspendNoGetTx:
+            def __init__(self, tx_map, spent_by):
+                self.tx_map = tx_map
+                self.spent_by = spent_by
+
+            def address_txs(self, addr):
+                return self.tx_map.get(addr, [])
+
+            def outspend(self, txid, vout):
+                spender_id = self.spent_by.get((txid, vout))
+                if spender_id is None:
+                    return SimpleNamespace(spent=False, txid=None, vin=None)
+                return SimpleNamespace(spent=True, txid=spender_id, vin={"txid": txid, "vout": vout})
+
+            def __call__(self, addr):
+                return self.tx_map.get(addr, [])
+
+        provider = OutspendNoGetTx({SEED: [spender]}, {("u1", 0): "sp1"})
+        result = GraphBuilder().build(SEED, provider, hops=2)
+        assert result.stats.degraded is False
+        assert result.stats.expanded == 1
+        assert node_id("transaction", "sp1") in result.node_ids()
+
+    def test_seed_address_txs_unreachable_degrades_to_empty(self):
+        """种子地址数据源不可达 → _owned_utxos 降级，仅保留种子节点。"""
+        def dead_provider(addr):
+            raise ConnectionError("esplora unreachable")
+
+        result = GraphBuilder().build(SEED, dead_provider, hops=1)
+        assert result.stats.degraded is True
+        assert len(result.nodes) == 1
+        assert result.edges == []
 
 
 # ---------------------------------------------------------------------------

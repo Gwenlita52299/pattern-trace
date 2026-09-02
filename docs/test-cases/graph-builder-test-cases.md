@@ -447,3 +447,34 @@
 **预期结果**
 - 输出耗时对比表（非在线延迟指标）
 - 结论仅用于批量离线分析决策，不驱动在线查询优化
+
+---
+
+## GB-25 outspend 权威 spent_by——修复 issue #3
+
+- **优先级**：P1
+- **来源**：issue #3「use outspend API as the authoritative UTXO expansion model」
+
+**背景**
+旧实现以「扫描 owner 地址交易列表里的 input prevout」来解析消费交易，存在分页遗漏、
+重复扫描、语义混淆、以及「找不到消费交易时把已花 UTXO 误判为 unspent」等风险。
+
+**目标模型**
+`(txid, vout, owner) → GET /tx/:txid/outspend/:vout`：
+- `spent=false` → unspent 叶子（不产边）
+- `spent=true` → 得 `spending_txid`，再 `GET /tx/:spending_txid` 拉全量消费交易
+- 之后仍按 CoinJoin / crosschain / 时间窗口判定，并遍历其输出生成下一层 UTXO
+
+**前置条件**
+- provider 实现 outspend 协议（`address_txs` / `outspend` / `get_tx`）
+- live：`LiveEsploraProvider`；fixture：`FixtureTxProvider`（均实现该协议）
+
+**操作步骤**
+1. 构造「消费交易不在 owner 地址交易列表页内」的图（模拟分页遗漏）
+2. `builder.build(seed_address, provider, ...)`
+
+**预期结果**
+- 已花 UTXO 不再被误判为 `unspent`（`stats.unspent == 0`）
+- 消费交易被权威解析，`tx:<spending_txid>` 与下游地址节点正常产出
+- 地址交易枚举经 `/txs` + `/txs/chain/:last_seen_txid` 全量分页补全历史输出
+- provider 未实现 outspend 协议时回退到地址扫描（兼容纯 callable 测试桩）
