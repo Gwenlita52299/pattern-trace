@@ -139,6 +139,11 @@ NodeState 字段：
   - `GET /address/{addr}/txs` → 地址交易首页；`GET /address/{addr}/txs/chain/{last_seen_txid}` → 分页续页
   - `GET /tx/{txid}` → 单笔交易详情（inputs/outputs）
   - `GET /tx/{txid}/outspend/{vout}` → 权威 outspend 判定（issue #3：spent_by 主依据）
+- **领域级接口（issue #3「建议的模块边界」）**：provider 提供
+  `resolve_spending_transaction(txid, vout, owner) -> SpendingResult`，内部封装
+  outspend 判定 + 全量消费交易获取，返回 `spent / spending_txid / spending_vin /
+  spending_tx`（并保留 txid/vout/owner/value/address/status 上下文）。GraphBuilder
+  只依赖该接口，不直接知道 Esplora endpoint。
 - 并发控制：`asyncio.Semaphore(10)` 同时最多 10 个 HTTP 请求
 - 缓存策略：
   - **`async-lru`**（`lru_cache` 不支持协程，禁止使用）maxsize=2048 缓存 tx 详情，key 含 Esplora base URL
@@ -151,6 +156,9 @@ NodeState 字段：
 - 熔断：连续 5 次失败后 circuit breaker 打开 30s，期间快速失败
 - 备用 provider：mempool.space（配置切换）；规模化可自托管 Electrs
 - 部分失败语义：单分支数据获取失败 → 该分支标记 `stats.degraded=true` 并继续其余分支，不整体失败
+- **事件循环隔离（issue #3 补充验收标准）**：live 模式的同步 Esplora 构建
+  （含重试等待）由编排层经 `asyncio.to_thread` 隔离到线程池，不阻塞 FastAPI
+  事件循环（避免单个 Esplora 超时/重试卡住并发分析期间的 healthz / polling）。
 - 并发预算：Semaphore(10) 仅对自托管端点使用；公共 Blockstream API 降至 5 并发以遵守限速
 
 ## 8. 规模裁剪规则

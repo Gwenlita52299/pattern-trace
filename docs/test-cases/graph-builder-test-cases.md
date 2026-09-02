@@ -503,3 +503,26 @@
 - 未花输出 → `unspent` 叶子；已花输出 → 经 outspend 解析消费交易并展开
 - 种子交易节点与各根输出地址节点、`T0 → addr` 支付边具象化子图起点，边端点均在节点集内（D3）
 - `get_tx` 数据源不可达 → `stats.degraded == true`（部分失败语义）
+
+---
+
+## GB-27 领域接口 + 事件循环隔离（issue #3 补充验收标准）
+
+- **优先级**：P1
+- **来源**：issue #3「建议的模块边界」+「补充验收标准」
+
+**领域接口**
+- provider 提供 `resolve_spending_transaction(txid, vout, owner) -> SpendingResult`，封装
+  outspend 判定 + 全量消费交易获取，返回 `spent / spending_txid / spending_vin /
+  spending_tx`（并保留 txid/vout/owner/value/address/status 上下文）。
+- GraphBuilder 只依赖该接口（`_spending_tx_domain`），不直接知道 Esplora endpoint。
+- 尚未实现该接口的 provider 退回 `outspend` + `get_tx` 组合，再退回地址扫描。
+
+**事件循环隔离**
+- 编排层用 `asyncio.to_thread` 把同步 Esplora 构建（种子时间窗 + 图构建）隔离到线程池，
+  live 网络请求/重试不阻塞 FastAPI 事件循环。
+
+**验收**
+- [ ] fixture 与 live provider 均实现 `resolve_spending_transaction`，返回语义一致
+- [ ] builder 优先走领域接口；已花 UTXO 正确展开、未花计 unspent、数据源故障计 degraded
+- [ ] live 同步构建隔离到线程池后，心跳/并发任务在构建期间照常运行（事件循环不被阻塞）

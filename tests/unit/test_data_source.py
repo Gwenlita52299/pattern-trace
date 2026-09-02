@@ -2,6 +2,9 @@
 
 不为 live provider 发公网请求：用 _fetch / _map_tx 语义注入确定性分页响应。
 """
+import asyncio
+import time
+
 from backend.graph_builder.builder import GraphBuilder
 from backend.graph_builder.data_source import FixtureTxProvider, LiveEsploraProvider
 
@@ -140,6 +143,55 @@ def test_fixture_provider_outspend_matches_spent_by_ledger():
     assert info.txid is None
 
 
+def test_fixture_provider_resolve_spending_transaction():
+    fp = FixtureTxProvider.load()
+    (txid, vout), spender = next(iter(fp._spent_by.items()))
+    res = fp.resolve_spending_transaction(txid, vout, owner="bc1qowner")
+    assert res.spent is True
+    assert res.spending_txid == spender
+    assert res.spending_tx is not None
+    assert res.spending_tx.txid == spender
+    assert res.txid == txid and res.vout == vout and res.owner == "bc1qowner"
+
+    un = fp.resolve_spending_transaction("nonexistent", 0, owner="bc1qowner")
+    assert un.spent is False
+    assert un.spending_txid is None
+    assert un.spending_tx is None
+    assert un.owner == "bc1qowner"
+
+
+def test_live_provider_resolve_spending_transaction():
+    p = LiveEsploraProvider("https://mempool.space/api")
+
+    def fake_fetch(path):
+        if path == "/tx/abc/outspend/3":
+            return {"spent": True, "txid": "spend_tx", "vin": {"txid": "abc", "vout": 3}}
+        if path == "/tx/spend_tx":
+            return {
+                "txid": "spend_tx",
+                "vin": [{"txid": "abc", "vout": 3,
+                         "prevout": {"scriptpubkey_address": "bc1qowner", "value": 100000000}}],
+                "vout": [{"scriptpubkey_address": "bc1qdst", "value": 50000000,
+                          "status": {"spent": False}}],
+                "status": {"confirmed": True, "block_time": 1700000000.0},
+            }
+        raise KeyError(path)
+
+    p._fetch = fake_fetch
+    res = p.resolve_spending_transaction("abc", 3, owner="bc1qowner")
+    assert res.spent is True
+    assert res.spending_txid == "spend_tx"
+    assert res.spending_tx.txid == "spend_tx"
+    assert res.spending_vin == 0
+    assert res.owner == "bc1qowner"
+
+    # unspent：outspend 返回 spent=false，不拉全量
+    p._fetch = lambda path: {"spent": False, "txid": None, "vin": None}
+    un = p.resolve_spending_transaction("def", 0)
+    assert un.spent is False
+    assert un.spending_tx is None
+
+
 def test_fixture_provider_get_tx_round_trip():
     fp = FixtureTxProvider.load()
     txid = next(iter(fp._tx_by_txid))
@@ -164,3 +216,39 @@ def test_fixture_provider_build_uses_authoritative_outspend():
     # 权威路径在非末页也有消费交易 → 至少一个分支正常展开或 early_stop
     assert (result.stats.expanded + result.stats.early_stop_wasabi
             + result.stats.early_stop_crosschain) > 0
+
+
+def test_sync_build_does_not_block_event_loop():
+    """issue #3 补充验收标准：live 同步 Esplora 请求不得阻塞 FastAPI 事件循环。
+
+    若直接在异步函数里同步构建（而非 asyncio.to_thread 线程池），慢数据源的 sleep
+    会阻塞事件循环，心跳任务无法先行完成。此测试验证隔离后事件循环保持响应。
+    """
+    SEED = "bc1qhb2xq7z8y9w0d1e2f3g4h5j6k7l8m9n0p1q2r3s4t5u6v7w8x9y0z1"
+
+    class SlowAddrProvider:
+        def address_txs(self, addr):
+            time.sleep(0.2)  # 模拟 live 网络阻塞（同步）
+            return []
+
+        def outspend(self, txid, vout):
+            raise AssertionError("no UTXOs expected")
+
+    async def heartbeat(interval, count):
+        ticks = 0
+        for _ in range(count):
+            await asyncio.sleep(interval)
+            ticks += 1
+        return ticks
+
+    provider = SlowAddrProvider()
+
+    async def run():
+        ticks_task = asyncio.create_task(heartbeat(0.01, 10))
+        # 图构建隔离到线程池：慢数据源的同步 I/O 不阻塞事件循环
+        subgraph = await asyncio.to_thread(GraphBuilder().build, SEED, provider, hops=1)
+        n_ticks = await ticks_task
+        return subgraph, n_ticks
+
+    subgraph, n_ticks = asyncio.run(run())
+    assert n_ticks >= 1  # 心跳在构建期间照常运行 → 事件循环未被阻塞

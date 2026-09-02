@@ -45,9 +45,14 @@ def build_high(A: dict) -> tuple[list[dict], list[dict], list]:
     """高风险拓扑；返回 (coinjoin_txids, crosschain 条目, txs_by_address 增量)。"""
     cj_txid = "demo" + ("0" * 56) + "coinjoin"
     xb_txid = "demo" + ("1" * 56) + "xbridge"
+    fund_txid = "demo" + ("7" * 60)
     txs = {
-        # CoinJoin 入口：builder 命中 coinjoin 集合 → remixer 边终止
+        # 种子为追踪目标：先接收外部注资（输出侧-only 根枚举需要「输出到该地址」的 UTXO），
+        # 再向下游花销；注资交易无关联输入账本时用外部合成 prevout（第 4 个 args 的 `git` 说明见后）。
         A["seed"]: [
+            # 注资入口（输出到种子，作为根 UTXO 来源）
+            tx(fund_txid, A["fund_src"], 3.5, [(A["seed"], 2.0), (A["seed"], 1.5)]),
+            # CoinJoin 入口：builder 命中 coinjoin 集合 → remixer 边终止
             tx(cj_txid, A["seed"], 2.0, [(A["peel1"], 0.5)]),
             tx("demo" + "2" * 60, A["seed"], 1.5,
                [(A["peel1"], 0.6), (A["change"], 0.85)]),
@@ -84,6 +89,8 @@ def build_low_and_normal(A: dict) -> dict:
     """低风险与普通钱包的浅层拓扑。"""
     return {
         A["low_seed"]: [
+            # 注资入口（输出到低风险种子）
+            tx("demo" + "8" * 60, A["fund_src"], 0.9, [(A["low_seed"], 0.9)]),
             tx("demo" + "a" * 60, A["low_seed"], 0.9,
                [(A["low_a"], 0.4), (A["low_b"], 0.45)]),
         ],
@@ -93,6 +100,8 @@ def build_low_and_normal(A: dict) -> dict:
                unspent=True),
         ],
         A["normal_seed"]: [
+            # 注资入口（输出到普通种子）
+            tx("demo" + "9" * 60, A["fund_src"], 0.5, [(A["normal_seed"], 0.5)]),
             tx("demo" + "c" * 60, A["normal_seed"], 0.5,
                [(A["normal_out"], 0.48)]),
         ],
@@ -109,6 +118,8 @@ def main() -> int:
         # low / normal 拓扑
         "low_seed": "seed-low", "low_a": "low-a", "low_b": "low-b",
         "normal_seed": "seed-normal", "normal_out": "normal-out",
+        # 各种子注资来源（外部地址，不参与向下展开）
+        "fund_src": "lazarus-fund",
     }
     A = {k: addr(v) for k, v in names.items()}
 

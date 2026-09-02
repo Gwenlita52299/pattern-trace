@@ -18,12 +18,45 @@ builder 的 provider 契约（issue #3 统一模型）：
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
 from .esplora import CircuitBreaker, CircuitOpenError
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "infra" / "fixtures" / "demo_txs.json"
+
+
+@dataclass
+class SpendingResult:
+    """领域级消费判定结果（issue #3「建议的模块边界」）。
+
+    统一封装 outspend 判定 + 全量消费交易获取：
+    - spent=false → spending_txid/spending_tx 为空（unspent 叶子）
+    - spent=true  → spending_txid 为消费交易 id，spending_tx 为完整消费交易，
+                    spending_vin 为消费交易中引用该 UTXO 的 input 下标（best-effort）
+    同时保留 UTXO 上下文（txid/vout/owner/value/address/status）供调用方使用。
+    """
+
+    spent: bool
+    spending_txid: str | None = None
+    spending_vin: int | None = None
+    spending_tx: object | None = None
+    # UTXO 上下文
+    txid: str = ""
+    vout: int = 0
+    owner: str = ""
+    value: float = 0.0
+    address: str = ""
+    status: str = ""
+
+
+def _find_spending_input_index(spending_tx, txid: str, vout: int) -> int | None:
+    """在消费交易 inputs 中找到引用 (txid, vout) 的 input 下标（best-effort）。"""
+    for i, inp in enumerate(getattr(spending_tx, "inputs", None) or []):
+        if inp.get("prev_txid") == txid and inp.get("prev_vout") == vout:
+            return i
+    return None
 
 
 class FixtureTxProvider:
@@ -133,6 +166,19 @@ class FixtureTxProvider:
             return SimpleNamespace(spent=False, txid=None, vin=None)
         return SimpleNamespace(spent=True, txid=spender, vin={"txid": txid, "vout": vout})
 
+    def resolve_spending_transaction(self, txid: str, vout: int, owner: str | None = None) -> SpendingResult:
+        """领域级消费判定（issue #3「建议的模块边界」）：本地账本 → SpendingResult。"""
+        info = self.outspend(txid, vout)
+        spending_tx = None
+        spending_vin = None
+        if info.spent and info.txid:
+            spending_tx = self.get_tx(info.txid)
+            spending_vin = _find_spending_input_index(spending_tx, txid, vout)
+        return SpendingResult(
+            spent=info.spent, spending_txid=info.txid, spending_vin=spending_vin,
+            spending_tx=spending_tx, txid=txid, vout=vout, owner=owner or "",
+        )
+
     @classmethod
     def load(cls, path: str | Path | None = None) -> FixtureTxProvider:
         return cls(json.loads(Path(path or FIXTURE_PATH).read_text()))
@@ -199,6 +245,21 @@ class LiveEsploraProvider:
         return SimpleNamespace(spent=bool(data.get("spent")),
                               txid=data.get("txid"),
                               vin=data.get("vin"))
+
+    def resolve_spending_transaction(self, txid: str, vout: int, owner: str | None = None) -> SpendingResult:
+        """领域级消费判定（issue #3「建议的模块边界」）：outspend + get_tx → SpendingResult。"""
+        data = self._fetch(f"/tx/{txid}/outspend/{vout}")
+        spent = bool(data.get("spent"))
+        spending_txid = data.get("txid") if spent else None
+        spending_tx = None
+        spending_vin = None
+        if spent and spending_txid:
+            spending_tx = self.get_tx(spending_txid)
+            spending_vin = _find_spending_input_index(spending_tx, txid, vout)
+        return SpendingResult(
+            spent=spent, spending_txid=spending_txid, spending_vin=spending_vin,
+            spending_tx=spending_tx, txid=txid, vout=vout, owner=owner or "",
+        )
 
     def seed_block_time(self, address: str) -> float | None:
         """时间窗基准（spec §3 out_of_range）：种子地址最近一次上链活动。

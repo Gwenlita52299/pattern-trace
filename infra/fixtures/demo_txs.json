@@ -124,6 +124,22 @@
     "block_time": 1700000000.0,
     "inputs": [
      {
+      "address": "bc1qsa3fntemvjurfqx0h4p87um656dqxalvgspjwp",
+      "value": 0.9
+     }
+    ],
+    "outputs": [
+     {
+      "address": "bc1qmfmv46yukccue8vt0rq9ely56vzs3phqjkx8vs",
+      "value": 0.9
+     }
+    ],
+    "txid": "demo888888888888888888888888888888888888888888888888888888888888"
+   },
+   {
+    "block_time": 1700000000.0,
+    "inputs": [
+     {
       "address": "bc1qmfmv46yukccue8vt0rq9ely56vzs3phqjkx8vs",
       "value": 0.9
      }
@@ -142,6 +158,26 @@
    }
   ],
   "bc1qmkuah48tqhtuqkhxlf2kn7awuhuymz4h7kgza7": [
+   {
+    "block_time": 1700000000.0,
+    "inputs": [
+     {
+      "address": "bc1qsa3fntemvjurfqx0h4p87um656dqxalvgspjwp",
+      "value": 3.5
+     }
+    ],
+    "outputs": [
+     {
+      "address": "bc1qmkuah48tqhtuqkhxlf2kn7awuhuymz4h7kgza7",
+      "value": 2.0
+     },
+     {
+      "address": "bc1qmkuah48tqhtuqkhxlf2kn7awuhuymz4h7kgza7",
+      "value": 1.5
+     }
+    ],
+    "txid": "demo777777777777777777777777777777777777777777777777777777777777"
+   },
    {
     "block_time": 1700000000.0,
     "inputs": [
@@ -180,6 +216,22 @@
    }
   ],
   "bc1qmqf0qnple30z7mkmy0r9r7csjahg9jjrsjq2l0": [
+   {
+    "block_time": 1700000000.0,
+    "inputs": [
+     {
+      "address": "bc1qsa3fntemvjurfqx0h4p87um656dqxalvgspjwp",
+      "value": 0.5
+     }
+    ],
+    "outputs": [
+     {
+      "address": "bc1qmqf0qnple30z7mkmy0r9r7csjahg9jjrsjq2l0",
+      "value": 0.5
+     }
+    ],
+    "txid": "demo999999999999999999999999999999999999999999999999999999999999"
+   },
    {
     "block_time": 1700000000.0,
     "inputs": [

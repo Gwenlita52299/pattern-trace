@@ -158,10 +158,11 @@ class GraphBuilder:
         self.dust_threshold_btc = dust_threshold_btc
 
     # ------------------------------------------------------------------
-    # 种子 UTXO 枚举：一个地址拥有的 UTXO = 其各交易里 input 的 prevout ∪
-    # 输出到自身的 UTXO（该地址的接收侧）。
-    # 对应基线 read_seed_utxos 的种子行；PatternTrace 以用户地址为种子并只向前追溯
-    # （资金流出方向），因此以「该地址正在消费的 prevout」为主，辅以接收侧输出。
+    # 种子 UTXO 枚举（issue #3 地址模式）：一个地址拥有的 UTXO 只来自**输出侧**——
+    # 该地址作为接收方（vout 的 scriptpubkey_address == address）被创建的新 UTXO。
+    # 对应基线 read_seed_utxos 的种子行；只向前追溯（资金流出方向）。
+    # 明确区分：vout 出现地址 = 该交易为此地址创建了新 UTXO（种子来源）；
+    #           vin 出现地址 = 该地址在消费旧 UTXO（不作为种子来源）。
     # ------------------------------------------------------------------
     def _owned_utxos(self, address: str, tx_provider, st: BFSStats) -> list[UTXO_ENTRY]:
         utxos: list[UTXO_ENTRY] = []
@@ -184,10 +185,6 @@ class GraphBuilder:
                 # 该地址作为接收方拥有的 UTXO（可能被后续花费，也可能保持 unspent）
                 if out_.get("address") == address:
                     add(tx.txid, idx, address)
-            for inp in getattr(tx, "inputs", None) or []:
-                # prevout 指向一个该地址拥有的 UTXO（该地址在消费它）
-                if inp.get("address") == address and inp.get("prev_txid"):
-                    add(inp["prev_txid"], inp["prev_vout"], address)
         return utxos
 
     @staticmethod
@@ -205,9 +202,40 @@ class GraphBuilder:
     # 仅当 provider 未实现 outspend 协议（纯 callable 测试桩）时回退到地址扫描。
     # ------------------------------------------------------------------
     def _spending_tx(self, utxo_txid: str, utxo_n: int, owner: str, tx_provider, st: BFSStats):
+        # issue #3：优先领域级 resolve_spending_transaction（封装 outspend+get_tx），
+        # 其次退回 outspend+get_tx 组合（纯测试桩），再退回地址扫描（callable 桩）。
+        if hasattr(tx_provider, "resolve_spending_transaction"):
+            return self._spending_tx_domain(utxo_txid, utxo_n, owner, tx_provider, st)
         if hasattr(tx_provider, "outspend"):
             return self._spending_tx_outspend(utxo_txid, utxo_n, owner, tx_provider, st)
         return self._spending_tx_scan(utxo_txid, utxo_n, owner, tx_provider, st)
+
+    def _spending_tx_domain(self, utxo_txid: str, utxo_n: int, owner: str,
+                            tx_provider, st: BFSStats):
+        """用领域级 resolve_spending_transaction 解析消费交易（issue #3）。"""
+        try:
+            res = tx_provider.resolve_spending_transaction(utxo_txid, utxo_n, owner=owner)
+        except Exception:
+            st.degraded = True
+            return None
+        if getattr(res, "spent", False) is not True or not getattr(res, "spending_txid", None):
+            return None  # 权威未花 → unspent 叶子（unspent 终止，不产边）
+        spending_tx = getattr(res, "spending_tx", None)
+        if spending_tx is not None:
+            return spending_tx
+        # 领域对象未附完整交易（extremely 少见）→ 补拉全量，稳健兜底
+        if hasattr(tx_provider, "get_tx"):
+            try:
+                tx = tx_provider.get_tx(res.spending_txid)
+            except Exception:
+                st.degraded = True
+                return None
+            if tx is None:
+                st.degraded = True
+                return None
+            return tx
+        st.degraded = True
+        return None
 
     def _spending_tx_outspend(self, utxo_txid: str, utxo_n: int, owner: str,
                               tx_provider, st: BFSStats):
