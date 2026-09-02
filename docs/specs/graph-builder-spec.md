@@ -32,6 +32,12 @@ class GraphBuilderInput:
     max_total_nodes: int = 200
 ```
 
+**两种种子模式（issue #3 统一模型）**：
+- `build(seed_address, ...)`：以地址为种子——枚举其拥有的 UTXO 作为根队列。
+- `build_from_txid(seed_txid, ...)`：以交易为种子——`GET /tx/:seed_txid` 取 `vout[]`，
+  排除 OP_RETURN/dust 等不可追踪输出，每个可追踪输出 `(seed_txid, idx, addr)` 为一个
+  根分支（一个交易可形成多个子图），并按同一套 outspend 权威逻辑展开。
+
 ### 输出
 
 ```python

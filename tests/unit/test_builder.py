@@ -179,6 +179,90 @@ class TestOutspendAuthoritativeSpentBy:
 
 
 # ---------------------------------------------------------------------------
+# GB-26 · issue #3「输入为 txid」：从交易输出侧建立根 UTXO，按 outspend 展开
+# ---------------------------------------------------------------------------
+class TestBuildFromTxid:
+    def test_unspent_output_leaf(self):
+        """种子交易 T0 有一个未花输出 → 该根 UTXO 判 unspent，并连到 T0。"""
+        seed_tx = MockTx(txid="T0", outputs=[out("bc1qA", 0.5)])
+        provider = OutspendProvider({}, {}, {"T0": seed_tx})
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.stats.unspent == 1
+        assert node_id("transaction", "T0") in result.node_ids()
+        assert node_id("address", "bc1qA") in result.node_ids()
+
+    def test_spent_output_expands_via_outspend(self):
+        """T0 输出被消费 → outspend 解析消费交易，get_tx 补齐全量 → 正常展开。"""
+        seed_tx = MockTx(txid="T0", outputs=[out("bc1qA", 0.5)])
+        spender = MockTx(txid="S0", inputs=[vin("bc1qA", 0.5, "T0", 0)],
+                         outputs=[out("bc1qB", 0.4)], block_time=1700000000.0)
+        provider = OutspendProvider({}, {("T0", 0): "S0"}, {"T0": seed_tx, "S0": spender})
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.stats.expanded == 1
+        assert node_id("transaction", "S0") in result.node_ids()
+        assert node_id("address", "bc1qB") in result.node_ids()
+
+    def test_multiple_outputs_form_multiple_root_branches(self):
+        """T0 有两个可追踪输出 → 两个独立根 UTXO 分支（未花 → unspent×2）。"""
+        seed_tx = MockTx(txid="T0", outputs=[out("bc1qA", 0.5), out("bc1qB", 0.3)])
+        provider = OutspendProvider({}, {}, {"T0": seed_tx})
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.stats.unspent == 2
+        assert node_id("address", "bc1qA") in result.node_ids()
+        assert node_id("address", "bc1qB") in result.node_ids()
+
+    def test_excludes_op_return_and_dust_outputs(self):
+        """OP_RETURN（无地址）与 dust 输出不成为根 UTXO。"""
+        seed_tx = MockTx(txid="T0", outputs=[
+            out("bc1qA", 0.5),
+            {"address": None, "value": 1.0},            # OP_RETURN / 不可追踪
+            out("bc1qDust", DUST_THRESHOLD_BTC),         # dust
+        ])
+        provider = OutspendProvider({}, {}, {"T0": seed_tx})
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.stats.unspent == 1
+        assert node_id("address", "bc1qA") in result.node_ids()
+        assert node_id("address", "bc1qDust") not in result.node_ids()
+
+    def test_d3_id_integrity_for_txid_seed(self):
+        """种子交易模式产出的边端点均在节点集内，id 遵守 D3 契约。"""
+        seed_tx = MockTx(txid="T0", outputs=[out("bc1qA", 0.5)])
+        spender = MockTx(txid="S0", inputs=[vin("bc1qA", 0.5, "T0", 0)],
+                         outputs=[out("bc1qB", 0.4)], block_time=1700000000.0)
+        provider = OutspendProvider({}, {("T0", 0): "S0"}, {"T0": seed_tx, "S0": spender})
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.edges
+        for e in result.edges:
+            assert e.id == f"edge:{e.source}->{e.target}"
+            assert e.source in result.node_ids()
+            assert e.target in result.node_ids()
+
+    def test_get_tx_failure_degrades(self):
+        """种子交易数据源不可达 → 降级，不产节点（部分失败语义）。"""
+        class FailTx(OutspendProvider):
+            def get_tx(self, txid):
+                raise ConnectionError("esplora unreachable")
+
+        provider = FailTx({}, {}, {"T0": MockTx(txid="T0", outputs=[out("bc1qA", 0.5)])})
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.stats.degraded is True
+        assert len(result.nodes) == 0
+
+    def test_get_tx_unavailable_degrades(self):
+        """provider 未实现 get_tx 协议 → 交易种子无法取详情 → 降级。"""
+        result = GraphBuilder().build_from_txid("T0", make_provider({}), hops=2)
+        assert result.stats.degraded is True
+        assert len(result.nodes) == 0
+
+    def test_get_tx_returning_none_degrades(self):
+        """get_tx 查无该交易 → 降级（数据源缺失语义）。"""
+        provider = OutspendProvider({}, {}, {})  # txs_by_id 无 "T0"
+        result = GraphBuilder().build_from_txid("T0", provider, hops=2)
+        assert result.stats.degraded is True
+        assert len(result.nodes) == 0
+
+
+# ---------------------------------------------------------------------------
 # GB-14 hops 参数校验
 # ---------------------------------------------------------------------------
 class TestHopsValidation:

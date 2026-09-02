@@ -478,3 +478,28 @@
 - 消费交易被权威解析，`tx:<spending_txid>` 与下游地址节点正常产出
 - 地址交易枚举经 `/txs` + `/txs/chain/:last_seen_txid` 全量分页补全历史输出
 - provider 未实现 outspend 协议时回退到地址扫描（兼容纯 callable 测试桩）
+
+---
+
+## GB-26 输入为 txid——交易种子根 UTXO（issue #3）
+
+- **优先级**：P1
+- **来源**：issue #3「输入为 txid」小节
+
+**目标模型**
+`build_from_txid(seed_txid)`：`GET /tx/:seed_txid` → 取 `vout[]` →
+排除 OP_RETURN/dust 等不可追踪输出 → 每个可追踪输出 `(seed_txid, idx, addr)` 为一个
+根分支（一个交易可形成多个子图），按同一套 outspend 权威逻辑展开。
+
+**前置条件**
+- provider 实现 `get_tx`（取交易详情）与 `outspend`（权威消费判定）协议
+
+**操作步骤**
+1. 为种子交易提供含多个输出（含 OP_RETURN / dust 干扰项）的交易
+2. 对每个可追踪输出构造后续消费/未花场景
+
+**预期结果**
+- 无地址（OP_RETURN）与 dust 输出不成为根 UTXO
+- 未花输出 → `unspent` 叶子；已花输出 → 经 outspend 解析消费交易并展开
+- 种子交易节点与各根输出地址节点、`T0 → addr` 支付边具象化子图起点，边端点均在节点集内（D3）
+- `get_tx` 数据源不可达 → `stats.degraded == true`（部分失败语义）
