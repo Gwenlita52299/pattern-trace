@@ -16,7 +16,7 @@
 ingest/
 ├── load_lazarus_subgraphs.py    # 从 Parquet 切图并写入 patterns 表
 ├── generate_negatives.py         # 构造普通钱包负样本子图
-├── load_labels.py               # 地址标签 / CoinJoin txids / crosschain set 入库
+├── load_labels.py               # 地址标签 / CoinJoin txid 标记入库（无 crosschain CSV）
 ├── compute_embeddings.py         # 批量计算语义 embedding + 结构特征向量
 └── run_all.py                   # 一键执行全流程
 ```
@@ -60,17 +60,19 @@ ingest/
 
 ## 4. 标签表加载
 
-三张标签集合：
+标签集合（跨链判定不再来自标签表，issue #5 已移除 crosschain_tx_set）：
 
 | 标签类型 | 来源 | 存储位置 |
 |---|---|---|
 | 混币器地址 | 公开清单 + Lazarus 项目沉淀 | addresses_meta.labels |
 | CoinJoin 交易 ID | **交易结构级启发式判定**（`backend/detection/coinjoin.py`，无 CSV） | GraphBuilder 运行时按规则判别；`coinjoin_txids` 表为可选显式标记通道 |
-| 跨链 OP_RETURN 协议映射 | Thorchain / 侧链协议公开文档 | crosschain_tx_set |
 
-加载脚本将上述集合从 CSV/JSON 加载到 PostgreSQL，供 graph-builder 启动时读取到内存。
+加载脚本将上述集合加载到 PostgreSQL，供 graph-builder 启动时读取到内存。
 CoinJoin 的**主判定**已改为启发式规则（见 graph-builder-spec §4），`coinjoin_txids` csv
 不再作为来源（移除 csv 依赖）。
+跨链协议判定（issue #5）改由 `backend/detection/crosschain.py::CrosschainDetector`
+在运行时按 Esplora 交易字段（OP_RETURN / pegout）直接判别，**不读取
+op_returns_interesting.csv，也不写入 crosschain_tx_set 表**。
 
 ## 5. Embedding 计算
 

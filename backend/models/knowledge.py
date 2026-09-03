@@ -13,7 +13,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     Integer,
-    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -95,21 +94,4 @@ class CoinjoinTxid(Base):
 
     txid = Column(String(64), primary_key=True)
     coordinator = Column(String(30), default="", nullable=False)
-    source = Column(String(80), default="", nullable=False)
-
-
-class CrosschainTx(Base):
-    """跨链 OP_RETURN 协议映射 txid→protocol — builder 用于 early_stop_crosschain。
-
-    同一 txid 可携带多个协议（基线 txid→sorted[protocols]），
-    一行一对，复合主键即 upsert key。
-    """
-
-    __tablename__ = "crosschain_tx_set"
-    __table_args__ = (
-        PrimaryKeyConstraint("txid", "protocol", name="pk_crosschain_tx_protocol"),
-    )
-
-    txid = Column(String(64), nullable=False)
-    protocol = Column(String(30), nullable=False)
     source = Column(String(80), default="", nullable=False)

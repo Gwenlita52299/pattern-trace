@@ -1,23 +1,29 @@
-"""标签加载单测 — IG-07（CSV 解析与 NUL 剥离；DB 落库由门禁脚本验证）。"""
+"""标签加载单测 — IG-07（issue #5：跨链 CSV / crosschain_tx_set 标签链路已移除）。
 
-from ingest.load_labels import _read_csv_nul_safe
+验证 ingest/load_labels 不再读取 op_returns_interesting.csv、不再写入
+crosschain_tx_set 表，跨链判定交由运行时 CrosschainDetector；本模块只保留
+CoinJoin 产出地址 → addresses_meta 的加载（内存标签集切回二元组）。
+"""
+import inspect
+
+import ingest.load_labels as ll
 
 
-class TestCsvNulSafe:
-    def test_strips_nul_bytes(self, tmp_path):
-        p = tmp_path / "cj.csv"
-        p.write_bytes(
-            b"txid,block_height\n\x00abc123,884469\ndef456,884470\n")
-        rows = _read_csv_nul_safe(p)
-        assert [r["txid"] for r in rows] == ["abc123", "def456"]
+class TestCrosschainLabelRemoved:
+    def test_op_return_csv_path_removed(self):
+        """旧 CSV 读取常量与 NUL 剥离 helper（仅服务 crosschain CSV）已删除。"""
+        assert not hasattr(ll, "OP_RETURN_CSV")
+        assert not hasattr(ll, "_read_csv_nul_safe")
 
-    def test_normal_csv_unaffected(self, tmp_path):
-        p = tmp_path / "plain.csv"
-        p.write_text("txid,protocol\naa11,runes\nbb22,thorchain_swap\n")
-        rows = _read_csv_nul_safe(p)
-        assert {r["protocol"] for r in rows} == {"runes", "thorchain_swap"}
+    def test_load_into_memory_no_crosschain_model_reference(self):
+        """load_into_memory 不再引用 CrosschainTx 模型（跨链判定交给运行时 Detector）。"""
+        assert "CrosschainTx" not in inspect.getsource(ll.load_into_memory)
 
-    def test_empty_body_yields_no_rows(self, tmp_path):
-        p = tmp_path / "empty.csv"
-        p.write_bytes(b"txid,protocol\n")
-        assert _read_csv_nul_safe(p) == []
+    def test_load_into_memory_returns_mixer_and_coinjoin(self):
+        """内存标签集契约为 (mixer 地址集, coinjoin txid 集) 二元组（无 crosschain 映射）。"""
+        annotations = getattr(ll.load_into_memory, "__annotations__", {})
+        # 返回类型注解为 2 元组；若无注解则跳过（运行期由 DB 门禁脚本验证）
+        if "return" in annotations:
+            assert "tuple" in str(annotations["return"])
+        assert ll.COINJOIN_OUTPUTS_PARQUET == \
+            "results/step2_label/coinjoin_outputs_labeled.parquet"

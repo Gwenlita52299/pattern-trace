@@ -416,14 +416,17 @@ class TestBuilderWiring:
         assert any(e.is_remixer for e in result.edges)
         assert not any(e.is_crosschain for e in result.edges)
 
-    def test_crosschain_tx_set_still_fallback(self):
-        # 无 OP_RETURN 字段但 txid 在标签集 → 标签库兜底仍生效（向后兼容）
+    def test_label_fallback_removed_no_op_return_not_crosschain(self):
+        # issue #5：crosschain_tx_set 标签库兜底已移除。无 OP_RETURN / 无协议匹配的
+        # 交易不再因 txid 命中旧标签集而被判为跨链 → 照常展开（主判定只来自 Detector）。
         spender = MockTx(txid="known_lbl", inputs=[vin(SEED, 0.5, "u1")],
                          outputs=[{"address": "bc1qburn", "value": 0.23}])
-        builder = GraphBuilder(crosschain_tx_set={"known_lbl": "runes"})
+        builder = GraphBuilder()
         result = builder.build(SEED, make_provider({SEED: [spender]}), hops=1)
-        assert result.stats.early_stop_crosschain == 1
-        assert [e for e in result.edges if e.is_crosschain][0].op_return_protocol == "runes"
+        assert result.stats.early_stop_crosschain == 0
+        assert not any(e.is_crosschain for e in result.edges)
+        # 该消费交易照常被当作普通消费展开（非跨链停止），其输出支路按 hops 规则终止
+        assert (result.stats.expanded + result.stats.tx4_new_dst_hard_stop) >= 1
 
 
 # ---------------------------------------------------------------------------

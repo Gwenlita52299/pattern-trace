@@ -206,7 +206,6 @@ def test_fixture_provider_build_uses_authoritative_outspend():
     seed_time = fp.seed_block_time(seed)
     result = GraphBuilder(
         coinjoin_txids=fp.coinjoin_txids,
-        crosschain_tx_set=fp.crosschain_tx_set,
     ).build(seed, fp, hops=2, time_window_days=90, seed_block_time=seed_time)
     assert result.stats.degraded is False
     assert len(result.nodes) > 1

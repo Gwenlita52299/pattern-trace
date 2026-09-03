@@ -1,31 +1,24 @@
 """标签表加载 — ingest-spec §4 / IG-07。
 
 数据源：
-- data/op_return_decoded/op_returns_interesting.csv → crosschain_tx_set（txid→协议映射）
-  基线口径（step3_sub1_preprocessing）：interesting OP_RETURN 全部计入 crosschain 集合
 - results/step2_label/coinjoin_outputs_labeled.parquet → addresses_meta（coinjoin 产出地址）
 
-配套说明：CoinJoin 交易**不再由外部 csv（step1_coinjoin/coinjoin_txids.csv）供给**，
-改由 backend/detection/coinjoin.py 的启发式规则在 GraphBuilder 阶段直接按交易结构
-判定 `early_stop_wasabi`；本模块不再读取该 csv 文件（移除 csv 依赖）。
-
-CSV 含 NUL 字节，读取前统一剥离。
+配套说明：
+- CoinJoin 交易**不再由外部 csv（step1_coinjoin/coinjoin_txids.csv）供给**，
+  改由 backend/detection/coinjoin.py 的启发式规则在 GraphBuilder 阶段直接按交易结构
+  判定 `early_stop_wasabi`；本模块不再读取该 csv 文件（移除 csv 依赖）。
+- 跨链协议判定（issue #5）**不再由 CSV / crosschain_tx_set 标签表供给**，改由
+  backend/detection/crosschain.py::CrosschainDetector 在运行时按 Esplora 交易字段
+  （OP_RETURN / pegout）直接判定。本模块不再读取 op_returns_interesting.csv，
+  也不再写入 crosschain_tx_set 表（该表与 ORM 模型已删除）。
 """
 from __future__ import annotations
 
-import csv
-import io
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
-OP_RETURN_CSV = "data/op_return_decoded/op_returns_interesting.csv"
 COINJOIN_OUTPUTS_PARQUET = "results/step2_label/coinjoin_outputs_labeled.parquet"
-
-
-def _read_csv_nul_safe(path: Path) -> list[dict]:
-    raw = path.read_bytes().replace(b"\x00", b"")
-    return list(csv.DictReader(io.StringIO(raw.decode("utf-8", errors="replace"))))
 
 
 def _upsert(session, model, rows: list[dict], key_cols: list[str]) -> int:
@@ -42,21 +35,6 @@ def run(session, base_dir: str | None = None) -> dict[str, int]:
 
     base = Path(base_dir or get_settings().lazarus_data_dir)
     counts: dict[str, int] = {}
-
-    # --- crosschain txid→protocol（基线口径：interesting OP_RETURN 全集）---
-    seen_pairs: set[tuple[str, str]] = set()
-    cc_rows = []
-    for r in _read_csv_nul_safe(base / OP_RETURN_CSV):
-        txid = (r.get("txid") or "").strip()
-        protocol = (r.get("protocol") or "").strip()
-        pair = (txid, protocol)
-        if not txid or not protocol or pair in seen_pairs:
-            continue
-        seen_pairs.add(pair)
-        cc_rows.append({"txid": txid, "protocol": protocol,
-                        "source": "op_return_decoded"})
-    counts["crosschain_tx_set"] = _upsert(
-        session, _model("CrosschainTx"), cc_rows, ["txid", "protocol"])
 
     # --- CoinJoin 产出地址 → addresses_meta ---
     table = pq.read_table(base / COINJOIN_OUTPUTS_PARQUET)
@@ -76,21 +54,18 @@ def _model(name: str):
     return getattr(k, name)
 
 
-def load_into_memory(session) -> tuple[set[str], set[str], dict[str, str]]:
+def load_into_memory(session) -> tuple[set[str], set[str]]:
     """加载标签集合供 GraphBuilder 使用（IG-07 最后一条预期）。
 
-    返回 (mixer 地址集, coinjoin txid 集, crosschain txid→协议映射)。
+    返回 (mixer 地址集, coinjoin txid 集)。跨链判定由运行时 CrosschainDetector 承担，
+    不再从 DB 标签表加载 txid→protocol 映射（crosschain_tx_set 已移除）。
     """
-    from backend.models.knowledge import AddressMeta, CoinjoinTxid, CrosschainTx
+    from backend.models.knowledge import AddressMeta, CoinjoinTxid
 
     mixer = {row.address for row in session.query(AddressMeta)
              if set(row.labels or ()) & {"mixer", "coinjoin"}}
     cj_txids = {row.txid for row in session.query(CoinjoinTxid)}
-    # 同一 txid 多协议时取字典序最小，保证确定性
-    crosschain: dict[str, str] = {}
-    for row in session.query(CrosschainTx).order_by(CrosschainTx.txid, CrosschainTx.protocol):
-        crosschain.setdefault(row.txid, row.protocol)
-    return mixer, cj_txids, crosschain
+    return mixer, cj_txids
 
 
 if __name__ == "__main__":
@@ -104,11 +79,9 @@ if __name__ == "__main__":
     from common import get_engine
     from sqlalchemy.orm import Session
 
-
     engine = get_engine()
     with Session(engine) as s:
         counts = run(s)
-        mixer, cj, cc = load_into_memory(s)
+        mixer, cj = load_into_memory(s)
     print(f"labels loaded: {counts}")
-    print(f"in-memory: {len(mixer)} mixer addrs, {len(cj)} coinjoin txids, "
-          f"{len(cc)} crosschain txids")
+    print(f"in-memory: {len(mixer)} mixer addrs, {len(cj)} coinjoin txids")

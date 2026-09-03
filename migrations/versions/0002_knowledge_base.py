@@ -6,6 +6,10 @@ Create Date: 2026-08-23
 
 ingest-spec §2/§3a/§4。HNSW 索引只建在 patterns 上（业务召回库）；
 pattern_negatives 无向量索引——它只用于阈值校准与误报测量，不参与召回。
+
+issue #5：crosschain_tx_set 表已从本迁移移除（跨链判定改由运行时
+CrosschainDetector，不再写入标签表）。对已应用旧版 0002 的既有部署，请执行
+``DROP TABLE IF EXISTS crosschain_tx_set`` 清理遗留表（本库已无对应 ORM 模型）。
 """
 
 import sqlalchemy as sa
@@ -82,19 +86,9 @@ def upgrade() -> None:
         sa.Column("coordinator", sa.String(30), server_default="", nullable=False),
         sa.Column("source", sa.String(80), server_default="", nullable=False),
     )
-    op.create_table(
-        "crosschain_tx_set",
-        # 基线口径：同一 txid 可携带多个协议（txid→sorted[protocols]），
-        # 一行一对，复合主键即 upsert key（txid 不能单独做主键）
-        sa.Column("txid", sa.String(64), nullable=False),
-        sa.Column("protocol", sa.String(30), nullable=False),
-        sa.Column("source", sa.String(80), server_default="", nullable=False),
-        sa.PrimaryKeyConstraint("txid", "protocol", name="pk_crosschain_tx_protocol"),
-    )
 
 
 def downgrade() -> None:
-    op.drop_table("crosschain_tx_set")
     op.drop_table("coinjoin_txids")
     op.drop_table("addresses_meta")
     op.drop_index("ix_patterns_semantic_hnsw", table_name="patterns")

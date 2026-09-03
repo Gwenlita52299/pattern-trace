@@ -35,7 +35,7 @@ from ..llm_judge.judge import (
 )
 from ..llm_judge.providers import get_llm_client
 from ..models.base import TERMINAL_STATUSES, Judgment, JudgmentEvent
-from ..models.knowledge import CoinjoinTxid, CrosschainTx
+from ..models.knowledge import CoinjoinTxid
 from ..retrieval.retriever import Retriever, subgraphresult_to_canonical
 
 
@@ -98,11 +98,10 @@ def _judgment_cache(settings):
         return InMemoryCache()
 
 
-def _label_sets(session) -> tuple[set[str], dict[str, str]]:
-    cj = set(session.execute(select(CoinjoinTxid.txid)).scalars().all())
-    xc = {txid: proto for txid, proto in session.execute(
-        select(CrosschainTx.txid, CrosschainTx.protocol)).all()}
-    return cj, xc
+def _label_sets(session) -> set[str]:
+    # 跨链判定不再来自 DB 标签表（crosschain_tx_set 已移除）：GraphBuilder 只依赖
+    # 运行时 CrosschainDetector。此处仅保留 CoinJoin 显式标记集合。
+    return set(session.execute(select(CoinjoinTxid.txid)).scalars().all())
 
 
 async def run_analysis(judgment_id: str, session=None) -> str | None:
@@ -164,14 +163,12 @@ async def run_analysis(judgment_id: str, session=None) -> str | None:
 async def _execute(session, row: Judgment, settings, started: float) -> str:
     provider, _seeds = build_provider(settings)
 
-    coinjoin_txids, crosschain_set = _label_sets(session)
+    coinjoin_txids = _label_sets(session)
     if hasattr(provider, "coinjoin_txids"):
         # fixture 数据源自带夹具级标记集（demo txid 不在真实标签表里）
         coinjoin_txids = coinjoin_txids | provider.coinjoin_txids
-        crosschain_set = {**crosschain_set, **provider.crosschain_tx_set}
 
-    builder = GraphBuilder(coinjoin_txids=coinjoin_txids,
-                           crosschain_tx_set=crosschain_set)
+    builder = GraphBuilder(coinjoin_txids=coinjoin_txids)
     # out_of_range 终止需要时间窗基准（spec §3）：种子最近活动时刻；
     # live 模式下该取值会进 Redis 缓存，BFS 首次展开直接命中。
     # 注：此前为满足 issue #3「事件循环隔离」把构建隔离到 asyncio.to_thread，但该写法

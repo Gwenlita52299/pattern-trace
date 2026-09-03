@@ -221,8 +221,8 @@ POST /api/v1/addresses/analyze
 
 **early-stop 语义（交易级判定，非地址级黑洞）**：
 - spending tx 属于 `coinjoin_txids` 集合 → 生成 `is_stopped_expansion=true` 的边，不向交易内部展开
-- spending tx 属于跨链 `crosschain_tx_set`（OP_RETURN 桥协议）→ 同样 early-stop，并记录 `op_return_protocol`
-- 标签表除地址标签外，必须包含**交易级集合**：已知 CoinJoin/混币交易、跨链桥协议交易
+- spending tx 被运行时 `CrosschainDetector` 判定为跨链（OP_RETURN / pegout 协议）→ 同样 early-stop，并记录 `op_return_protocol`；判定来自 Esplora 交易字段，无 crosschain_tx_set / CSV 标签库（issue #5）
+- 标签表除地址标签外，必须包含**交易级集合**：已知 CoinJoin/混币交易（跨链桥协议改由运行时 CrosschainDetector 判别）
 
 **去重与状态**：
 - `seen_utxos` 使用精确复合键 `(txid, output_index, address)`，禁止 hash 截断

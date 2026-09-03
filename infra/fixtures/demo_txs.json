@@ -2,9 +2,6 @@
  "coinjoin_txids": [
   "demo00000000000000000000000000000000000000000000000000000000coinjoin"
  ],
- "crosschain_tx_set": {
-  "demo11111111111111111111111111111111111111111111111111111111xbridge": "thorchain"
- },
  "op_return_scenarios": {
   "coinjoin_plus_crosschain": {
    "block_time": 1700000000.0,
