@@ -117,6 +117,11 @@ def subgraphresult_to_canonical(result) -> dict:
         if n.get("kind") == "address" and n.get("first_layer") == 0:
             seed_address = n.get("label") or ""
             break
+    # issue #8：数据质量元数据。result 可能是无 stats 的桩（检索纯逻辑测试），
+    # 一并兜底为完整数据默认值。
+    stats = getattr(result, "stats", None)
+    def _stat(name, default):
+        return getattr(stats, name, default) if stats is not None else default
     return {
         "seed_address": seed_address,
         "nodes": sorted(nodes, key=lambda n: n.get("id", "")),
@@ -127,11 +132,10 @@ def subgraphresult_to_canonical(result) -> dict:
             "max_first_layer": max((n.get("first_layer") or 0 for n in nodes),
                                    default=0),
             # issue #8：部分失败保留 + 数据质量元数据
-            "data_quality": getattr(result.stats, "data_quality", "complete"),
-            "requires_manual_review": bool(
-                getattr(result.stats, "requires_manual_review", False)),
-            "missing_branches": int(getattr(result.stats, "missing_branches", 0)),
-            "source_errors": list(getattr(result.stats, "source_errors", [])),
+            "data_quality": _stat("data_quality", "complete"),
+            "requires_manual_review": bool(_stat("requires_manual_review", False)),
+            "missing_branches": int(_stat("missing_branches", 0)),
+            "source_errors": list(_stat("source_errors", [])),
         },
     }
 
