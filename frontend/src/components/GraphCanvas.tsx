@@ -118,7 +118,14 @@ function flowAmountLabel(e: FlowEdge): string {
   return "";
 }
 
-/** 从 id 出发，沿有向边可达的所有节点（不含 id 本身）。 */
+/**
+ * 从 id 出发，沿有向边可达的所有**严格下游**节点（不含 id 本身）。
+ *
+ * 地址流虽近似有向无环，但自转账/回流地址可能形成自环或环路（A→A、A→B→A）。
+ * 为让折叠操作只隐藏严格下游、不隐藏触发折叠的节点本身，同时避免环导致死循环：
+ *   - 用独立于结果的 `visited` 集合记录已访问节点，并**预先加入起始 id**；
+ *     这样环路（或自环）回到起点时不会再把 id 计入结果（descendants）。
+ */
 function computeDescendants(flow: AddressFlow, id: string): Set<string> {
   const children = new Map<string, string[]>();
   for (const e of flow.edges) {
@@ -127,11 +134,13 @@ function computeDescendants(flow: AddressFlow, id: string): Set<string> {
     else children.set(e.source, [e.target]);
   }
   const out = new Set<string>();
+  const visited = new Set<string>([id]); // 起始节点视为已访问：自环/环路不重新计入
   const stack = [id];
   while (stack.length) {
     const cur = stack.pop()!;
     for (const c of children.get(cur) ?? []) {
-      if (!out.has(c)) {
+      if (!visited.has(c)) {
+        visited.add(c);
         out.add(c);
         stack.push(c);
       }
@@ -140,12 +149,19 @@ function computeDescendants(flow: AddressFlow, id: string): Set<string> {
   return out;
 }
 
-/** 所有「已收回」节点的下游节点的并集——这些节点当前应隐藏。 */
+/**
+ * 所有「已收回」节点的下游节点的并集——这些节点当前应隐藏。
+ *
+ * 折叠节点自身必须保持可见（以便用户再次展开并恢复下游），即使它们互相位于
+ * 对方的下游中（自环/环路 A→B→A、或多个节点嵌套折叠）。因此从隐藏集合中剔除
+ * 所有已折叠节点：隐藏的是「下游」而非「折叠的锚点节点」。
+ */
 function hiddenSet(flow: AddressFlow, collapsed: Set<string>): Set<string> {
   const hidden = new Set<string>();
   for (const id of collapsed) {
     for (const d of computeDescendants(flow, id)) hidden.add(d);
   }
+  for (const c of collapsed) hidden.delete(c);
   return hidden;
 }
 
