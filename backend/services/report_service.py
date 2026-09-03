@@ -126,7 +126,9 @@ def _render_html(case: Case, case_id: str, entries: list[dict]) -> str:
                  f"model:{_escape(j.model or '')}<br/>"
                  f"prompt:{j.prompt_version} · builder:{j.builder_version}<br/>"
                  f"concluded:{_escape(_fmt_time(getattr(j, 'concluded_at', None)))}<br/>"
-                 f"as_of:{_escape(_fmt_time(getattr(j, 'data_as_of', None)))}")
+                 f"as_of:{_escape(_fmt_time(getattr(j, 'data_as_of', None)))}<br/>"
+                 f"data_quality:{_escape(getattr(j, 'data_quality', 'complete'))}"
+                 f" · 复核:{ '是' if getattr(j, 'requires_manual_review', False) else '否' }")
         rows.append(
             f"<tr><td class='mono'>{addr}</td>"
             f"<td><b>{j.risk_level}</b></td><td>{conf}</td>"
@@ -211,6 +213,8 @@ def _render_pdf(case: Case, case_id: str, entries: list[dict]) -> bytes:
         _line(f"  judgment={getattr(j, 'id', '')[:16]} "
               f"concluded={_fmt_time(getattr(j, 'concluded_at', None))} "
               f"data_as_of={_fmt_time(getattr(j, 'data_as_of', None))}")
+        _line(f"  data_quality={getattr(j, 'data_quality', 'complete')} "
+              f"requires_manual_review={bool(getattr(j, 'requires_manual_review', False))}")
         for eid in (j.evidence or [])[:10]:
             _line(f"    - {eid}")
         pdf.ln(3)

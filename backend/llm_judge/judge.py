@@ -59,6 +59,16 @@ Rules:
 5. Confidence is a float between 0.0 and 1.0.
 6. reasoning must reference specific structural features of the input subgraph."""
 
+# issue #8：数据质量 degraded 时注入的提示——图不完整，须谨慎判断、说明局限、
+# 不能把观察到的图当作完整链路。
+DEGRADED_NOTE = (
+    "The transaction graph is INCOMPLETE because some upstream data requests failed. "
+    "Do not treat the observed graph as exhaustive. "
+    "Explain the missing-data limitation and provide a cautious assessment. "
+    "Lower confidence accordingly; prefer recommended_action='review' unless evidence "
+    "is conclusive within the observed subgraph."
+)
+
 
 @dataclass
 class JudgmentResult:
@@ -187,12 +197,17 @@ def subgraph_valid_ids(subgraph) -> set[str]:
     return {_view(n, "id") for n in nodes} | {_view(e, "id") for e in edges}
 
 
-def build_messages(subgraph, candidates, retry_note: str | None = None) -> list[dict]:
-    """system prompt + 子图紧凑摘要 + 候选 pattern 列表（+ 重试错误提示）。"""
+def build_messages(subgraph, candidates, retry_note: str | None = None,
+                   degraded: bool = False,
+                   missing_branches: int = 0) -> list[dict]:
+    """system prompt + 子图紧凑摘要 + 候选 pattern 列表（+ 重试错误提示 / degraded 说明）。"""
     nodes = _view(subgraph, "nodes") or []
     edges = _view(subgraph, "edges") or []
     lines = ["INPUT SUBGRAPH:"]
     lines.append(f"seed: {_view(subgraph, 'seed_address', '')}")
+    if degraded:
+        lines.append(f"DATA QUALITY: degraded (missing_branches={missing_branches})")
+        lines.append("NOTE: " + DEGRADED_NOTE)
     for n in nodes:
         lines.append(f"node id={_view(n, 'id')} kind={_view(n, 'kind')}")
     for e in edges:
@@ -280,6 +295,8 @@ class LLMJudge:
         model: str = "",
         prompt_version: str = PROMPT_VERSION,
         temperature: float = 0.0,
+        degraded: bool = False,
+        missing_branches: int = 0,
     ) -> JudgmentResult:
         valid_ids = subgraph_valid_ids(subgraph)
         model = model or getattr(self.client, "model_name", "")
@@ -297,7 +314,9 @@ class LLMJudge:
         if cached is not None:  # LJ-07：命中即返回，不触达 LLM
             return JudgmentResult.from_json(cached)
 
-        messages = build_messages(subgraph, candidates)
+        messages = build_messages(subgraph, candidates,
+                                  degraded=degraded,
+                                  missing_branches=missing_branches)
         last_error: JudgmentValidationError | None = None
         for attempt in range(self.max_retries):
             attempt_messages = messages

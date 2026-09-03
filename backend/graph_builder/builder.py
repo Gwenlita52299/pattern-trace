@@ -20,6 +20,7 @@ spent_by 解析在 issue #3 后采用 Esplora outspend API（GET /tx/:txid/outsp
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -93,6 +94,30 @@ class BFSStats:
     degraded: bool = False
     queue_empty: bool = True
     elapsed_ms: float = 0.0
+    # issue #8：部分失败保留 + 数据质量元数据
+    missing_branches: int = 0
+    source_errors: list[dict] = field(default_factory=list)
+
+    @property
+    def data_quality(self) -> str:
+        """degraded：存在上游请求失败（部分子图不完整）；否则 complete。"""
+        return "degraded" if self.degraded else "complete"
+
+    @property
+    def requires_manual_review(self) -> bool:
+        return self.degraded
+
+    def record_error(self, *, stage: str, address: str | None,
+                     error_code: str, message: str = "") -> None:
+        """记录一次上游分支失败：置 degraded、累加缺失分支数、留源错误摘要。"""
+        self.degraded = True
+        self.missing_branches += 1
+        self.source_errors.append({
+            "stage": stage,
+            "address": address,
+            "error_code": error_code,
+            "message": message,
+        })
 
     def termination_summary(self) -> dict[str, int]:
         """仅基线词表内的终止统计——对齐校验用。"""
@@ -104,6 +129,24 @@ class BFSStats:
             "expanded": self.expanded,
             "tx4_new_dst_hard_stop": self.tx4_new_dst_hard_stop,
         }
+
+
+def _esplora_error_code(exc: BaseException | None) -> str:
+    """把上游图数据异常映射为错误码；无异常上下文返回通用 UPSTREAM_ERROR。"""
+    if exc is None:
+        return "UPSTREAM_ERROR"
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return "TIMEOUT"
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover
+        httpx = None
+    if httpx is not None and isinstance(exc, httpx.HTTPStatusError) \
+            and exc.response.status_code == 429:
+        return "RATE_LIMITED"
+    if httpx is not None and isinstance(exc, httpx.HTTPError):
+        return "HTTP_ERROR"
+    return "UPSTREAM_ERROR"
 
 
 @dataclass
@@ -172,9 +215,10 @@ class GraphBuilder:
         seen: set[tuple[str, int, str]] = set()
         try:
             txs = self._address_txs(tx_provider, address)
-        except Exception:
+        except Exception as exc:
             # 部分失败语义：种子地址数据源不可达 → 降级，不产节点
-            st.degraded = True
+            st.record_error(stage="esplora", address=address,
+                            error_code=_esplora_error_code(exc), message=str(exc))
             return utxos
 
         def add(txid: str, vout: int, addr: str) -> None:
@@ -218,8 +262,9 @@ class GraphBuilder:
         """用领域级 resolve_spending_transaction 解析消费交易（issue #3）。"""
         try:
             res = tx_provider.resolve_spending_transaction(utxo_txid, utxo_n, owner=owner)
-        except Exception:
-            st.degraded = True
+        except Exception as exc:
+            st.record_error(stage="esplora", address=owner,
+                            error_code=_esplora_error_code(exc), message=str(exc))
             return None
         if getattr(res, "spent", False) is not True or not getattr(res, "spending_txid", None):
             return None  # 权威未花 → unspent 叶子（unspent 终止，不产边）
@@ -230,14 +275,19 @@ class GraphBuilder:
         if hasattr(tx_provider, "get_tx"):
             try:
                 tx = tx_provider.get_tx(res.spending_txid)
-            except Exception:
-                st.degraded = True
+            except Exception as exc:
+                st.record_error(stage="esplora", address=owner,
+                                error_code=_esplora_error_code(exc), message=str(exc))
                 return None
             if tx is None:
-                st.degraded = True
+                st.record_error(stage="esplora", address=owner,
+                                error_code="UPSTREAM_ERROR",
+                                message="get_tx returned None")
                 return None
             return tx
-        st.degraded = True
+        st.record_error(stage="esplora", address=owner,
+                        error_code="UPSTREAM_ERROR",
+                        message="provider missing get_tx")
         return None
 
     def _spending_tx_outspend(self, utxo_txid: str, utxo_n: int, owner: str,
@@ -245,8 +295,9 @@ class GraphBuilder:
         """用 outspend 权威判定该 UTXO 是否被消费及其消费交易，再拉全量交易。"""
         try:
             info = tx_provider.outspend(utxo_txid, utxo_n)
-        except Exception:
-            st.degraded = True
+        except Exception as exc:
+            st.record_error(stage="esplora", address=owner,
+                            error_code=_esplora_error_code(exc), message=str(exc))
             return None
         if getattr(info, "spent", False) is not True or not getattr(info, "txid", None):
             return None  # 权威未花 → unspent 叶子（unspent 终止，不产边）
@@ -256,11 +307,14 @@ class GraphBuilder:
         if hasattr(tx_provider, "get_tx"):
             try:
                 tx = tx_provider.get_tx(spending_txid)
-            except Exception:
-                st.degraded = True
+            except Exception as exc:
+                st.record_error(stage="esplora", address=owner,
+                                error_code=_esplora_error_code(exc), message=str(exc))
                 return None
             if tx is None:
-                st.degraded = True
+                st.record_error(stage="esplora", address=owner,
+                                error_code="UPSTREAM_ERROR",
+                                message="get_tx returned None")
                 return None
             return tx
 
@@ -268,10 +322,13 @@ class GraphBuilder:
             for tx in tx_provider(owner):
                 if getattr(tx, "txid", None) == spending_txid:
                     return tx
-        except Exception:
-            st.degraded = True
+        except Exception as exc:
+            st.record_error(stage="esplora", address=owner,
+                            error_code=_esplora_error_code(exc), message=str(exc))
             return None
-        st.degraded = True
+        st.record_error(stage="esplora", address=owner,
+                        error_code="UPSTREAM_ERROR",
+                        message="spending transaction not found")
         return None
 
     def _spending_tx_scan(self, utxo_txid: str, utxo_n: int, owner: str,
@@ -279,8 +336,9 @@ class GraphBuilder:
         """旧行为：按地址扫描其交易列表，匹配引用该 UTXO 的 input（仅为兼容保留）。"""
         try:
             txs = tx_provider(owner)
-        except Exception:
-            st.degraded = True
+        except Exception as exc:
+            st.record_error(stage="esplora", address=owner,
+                            error_code=_esplora_error_code(exc), message=str(exc))
             return None
         for tx in txs:
             for inp in getattr(tx, "inputs", None) or []:
@@ -347,15 +405,20 @@ class GraphBuilder:
         - 同时产出 T0 → addr 支付边，保证 D3 引用完整性（种子交易连到根输出所有者）
         """
         if not hasattr(tx_provider, "get_tx"):
-            st.degraded = True
+            st.record_error(stage="esplora", address=seed_txid,
+                            error_code="UPSTREAM_ERROR",
+                            message="provider missing get_tx")
             return [], [], []
         try:
             tx = tx_provider.get_tx(seed_txid)
-        except Exception:
-            st.degraded = True
+        except Exception as exc:
+            st.record_error(stage="esplora", address=seed_txid,
+                            error_code=_esplora_error_code(exc), message=str(exc))
             return [], [], []
         if tx is None:
-            st.degraded = True
+            st.record_error(stage="esplora", address=seed_txid,
+                            error_code="UPSTREAM_ERROR",
+                            message="get_tx returned None")
             return [], [], []
 
         seed_node = Node(id=node_id("transaction", seed_txid),

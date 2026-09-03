@@ -126,6 +126,12 @@ def subgraphresult_to_canonical(result) -> dict:
             "edge_count": len(edges),
             "max_first_layer": max((n.get("first_layer") or 0 for n in nodes),
                                    default=0),
+            # issue #8：部分失败保留 + 数据质量元数据
+            "data_quality": getattr(result.stats, "data_quality", "complete"),
+            "requires_manual_review": bool(
+                getattr(result.stats, "requires_manual_review", False)),
+            "missing_branches": int(getattr(result.stats, "missing_branches", 0)),
+            "source_errors": list(getattr(result.stats, "source_errors", [])),
         },
     }
 

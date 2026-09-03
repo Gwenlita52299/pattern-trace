@@ -58,6 +58,10 @@ export interface JudgmentPayload {
   latency_ms?: number | null;
   concluded_at?: string | null;
   data_as_of?: string | null;
+  data_quality?: "complete" | "degraded" | string;
+  requires_manual_review?: boolean;
+  missing_branches?: number;
+  source_errors?: { stage: string; address?: string; error_code: string; message?: string }[];
 }
 
 const START_INTERVAL_MS = 2_000;

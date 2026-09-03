@@ -1085,10 +1085,13 @@ def _judgment_payload(row) -> dict:
         "concluded_at": row.concluded_at.isoformat()
         if row.concluded_at else None,
         "data_as_of": row.data_as_of.isoformat() if row.data_as_of else None,
+        "data_quality": getattr(row, "data_quality", "complete"),
+        "requires_manual_review": bool(getattr(row, "requires_manual_review", False)),
         "poll_url": f"/api/v1/judgments/{row.id}",
     }
     if row.status == "completed":
         snap = row.subgraph_snapshot or {}
+        snap_stats = snap.get("stats", {})
         base.update({
             "risk_level": row.risk_level,
             "matched_pattern_id": row.matched_pattern_id,
@@ -1103,6 +1106,9 @@ def _judgment_payload(row) -> dict:
             "prompt_version": row.prompt_version,
             "builder_version": row.builder_version,
             "latency_ms": row.latency_ms,
+            # issue #8：数据质量 / 缺失分支 / 源错误摘要
+            "missing_branches": int(snap_stats.get("missing_branches", 0)),
+            "source_errors": snap_stats.get("source_errors", []),
         })
     elif row.status == "failed":
         # spec：failed 态不含判断字段（BE-14 断言 risk_level/confidence 为 null）

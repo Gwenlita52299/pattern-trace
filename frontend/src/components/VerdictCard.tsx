@@ -117,6 +117,30 @@ export default function VerdictCard({ onRetry }: VerdictCardProps) {
         </div>
       </div>
 
+      {/* issue #8：数据不完整 → 人工复核提示 */}
+      {judgment?.data_quality === "degraded" && (
+        <div
+          className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-[11px] text-amber-800"
+          data-testid="verdict-degraded"
+        >
+          <p className="font-semibold">数据不完整 · 需人工复核</p>
+          <p className="mt-1">
+            部分上游数据请求失败，图可能不完整；缺失分支{" "}
+            {judgment.missing_branches ?? "?"}。
+          </p>
+          {(judgment.source_errors?.length ?? 0) > 0 && (
+            <ul className="mt-1 list-inside list-disc">
+              {judgment.source_errors!.slice(0, 5).map((e, i) => (
+                <li key={i} className="font-mono">
+                  {e.error_code}
+                  {e.address ? ` @ ${e.address}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       {judgment?.reasoning && (
         <p className="mt-3 whitespace-pre-wrap text-xs leading-relaxed text-slate-700">
           {judgment.reasoning}

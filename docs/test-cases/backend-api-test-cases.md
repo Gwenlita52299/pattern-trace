@@ -951,3 +951,24 @@
 - 报告证据链包含 `judgment_id / subgraph_hash / model / prompt_version / builder_version / risk_level / confidence / evidence / reasoning / recommended_action / concluded_at / data_as_of`
 
 ---
+
+---
+
+## BE-52 数据质量 degraded 通过 API 暴露并在报告中展示（issue #8）
+
+- **优先级**：P1
+- **来源**：GitHub issue #8 —— Judgment/报告展示数据不完整、缺失分支、源错误摘要与人工复核提示
+
+**前置条件**
+- 某地址分析产生 degraded 结论（部分上游分支失败）
+
+**操作步骤**
+1. `GET /api/v1/judgments/:id`（completed）检查响应
+2. 生成该案件报告，检查渲染内容
+
+**预期结果**
+- 响应含 `data_quality="degraded"`、`requires_manual_review=true`、`missing_branches≥1`、`source_errors` 列表（stage/address/error_code/message）
+- 报告渲染包含 `data_quality`/复核标记（HTML 行内证据链；PDF 新增一行）
+- 完整数据场景无 degraded 标记，行为与升级前一致
+
+---

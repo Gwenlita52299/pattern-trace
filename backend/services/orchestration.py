@@ -204,12 +204,16 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
                      cache=_judgment_cache(settings))
     verdict = None
     provider_code: str | None = None
+    # issue #8：图不完整时把数据质量事实传给 LLM（谨慎判断、说明局限）
+    graph_degraded = bool(subgraph.stats.degraded)
+    missing_branches = int(subgraph.stats.missing_branches)
     for attempt in range(PROVIDER_ATTEMPTS):
         try:
             verdict = await judge.judge(
                 address=row.address, subgraph=canon,
                 candidates=retrieval.candidates,
-                builder_version=BUILDER_VERSION, model=settings.llm_model)
+                builder_version=BUILDER_VERSION, model=settings.llm_model,
+                degraded=graph_degraded, missing_branches=missing_branches)
             break
         except Exception as exc:
             code = _provider_error_code(exc)
@@ -245,6 +249,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             thinking=judge.last_thinking or None,
             concluded_at=datetime.now(UTC),
             data_as_of=data_as_of,
+            data_quality=subgraph.stats.data_quality,
+            requires_manual_review=subgraph.stats.requires_manual_review,
         ))
     if result.rowcount == 0:  # 终态守卫：并发方已终结该任务
         session.rollback()
