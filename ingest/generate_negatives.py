@@ -72,19 +72,20 @@ def generate(count: int, seed_key: int = 42) -> list[dict]:
                 random.Random(f"neg-rekey:{seed_key}:{slot}:{len(seen)}"))[4:]
         seen.add(sub.seed_address)
         rows.append(new_pattern_row(
-            name=name, source="constructed_normal", grade="B", sub=sub))
+            name=name, source="constructed_normal", grade="B",
+            provenance="negative", sub=sub))
     return rows
 
 
 def count_positives(session) -> int:
-    """正样本口径（IG-05 统一定义）：patterns 表中 evidence_grade='A' 的行
-    （含 lazarus_confirmed 与 lazarus_synth，验证脚本会分别打印两种来源计数）。"""
+    """正样本口径（IG-05 统一定义）：patterns 表全部行
+    （confirmed 与 synthetic；issue #10 起不再以 evidence_grade='A' 为口径，
+    因为 synthetic 已改用 'S' 等级，但仍属正样本/检索参考）。"""
     from sqlalchemy import func
 
     from backend.models.knowledge import Pattern
 
-    return session.query(func.count(Pattern.id)).filter(
-        Pattern.evidence_grade == "A").scalar() or 0
+    return session.query(func.count(Pattern.id)).scalar() or 0
 
 
 def run(session, ratio: int = 3, seed_key: int = 42,

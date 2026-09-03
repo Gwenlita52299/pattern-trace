@@ -6,10 +6,11 @@ from ingest.generate_negatives import count_positives, generate, generate_one
 
 
 class TestNegativeGeneration:
-    def test_source_and_grade(self):
+    def test_source_grade_and_provenance(self):
         rows = generate(10)
         assert all(r["source"] == "constructed_normal" for r in rows)
         assert all(r["evidence_grade"] == "B" for r in rows)
+        assert all(r["provenance"] == "negative" for r in rows)
 
     def test_no_mixer_or_crosschain_contact(self):
         """IG-06：无一例接触混币器/跨链标记（结构性保证）。"""
@@ -48,17 +49,25 @@ class TestNegativeGeneration:
 
 
 class TestRatioAccounting:
-    def test_count_positives_uses_grade_a_semantics(self, monkeypatch):
-        """IG-05 口径：正样本 = patterns 表 evidence_grade='A'（含 confirmed+synth）。"""
+    def test_count_positives_counts_all_patterns(self, monkeypatch):
+        """IG-05 口径（issue #10）：正样本 = patterns 表**全部**行
+        （confirmed + synthetic），不再限定 evidence_grade='A'（synthetic 已是 'S'）。
+        count_positives 不应再带 evidence_grade 过滤。"""
         class FakeQuery:
-            def __init__(self, base): self.base = base
-            def filter(self, *a): return self
-            def scalar(self): return self.base
+            def __init__(self): self.filter_calls = 0
+            def filter(self, *a):
+                self.filter_calls += 1
+                return self
+            def scalar(self): return 123
+
+        q = FakeQuery()
 
         class FakeSession:
-            def query(self, model): return FakeQuery(123)
+            def __init__(self): self._q = q
+            def query(self, model): return self._q
 
         assert count_positives(FakeSession()) == 123
+        assert q.filter_calls == 0  # 未按 evidence_grade 过滤
 
     def test_target_computation_matches_ratio(self):
         # run() 的 target = round(ratio × positives)；这里验证换算本身

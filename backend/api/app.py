@@ -637,7 +637,9 @@ def create_app() -> FastAPI:
     def list_patterns(
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
-        evidence_grade: str | None = Query(default=None, pattern="^[AB]$"),
+        evidence_grade: str | None = Query(default=None, pattern="^[ABS]$"),
+        provenance: str | None = Query(
+            default=None, pattern="^(confirmed|synthetic|negative)$"),
         search: str | None = Query(default=None),
     ):
         from ..models.knowledge import Pattern
@@ -649,6 +651,9 @@ def create_app() -> FastAPI:
                 stmt = stmt.where(Pattern.evidence_grade == evidence_grade)
                 count_stmt = count_stmt.where(
                     Pattern.evidence_grade == evidence_grade)
+            if provenance:
+                stmt = stmt.where(Pattern.provenance == provenance)
+                count_stmt = count_stmt.where(Pattern.provenance == provenance)
             if search:
                 like = f"%{search}%"
                 cond = Pattern.name.ilike(like)
@@ -1066,7 +1071,8 @@ def _pattern_summary(p) -> dict:
     stats = (p.canonical_subgraph or {}).get("stats", {})
     return {
         "id": p.id, "name": p.name, "source": p.source,
-        "evidence_grade": p.evidence_grade, "seed_address": p.seed_address,
+        "provenance": p.provenance, "evidence_grade": p.evidence_grade,
+        "seed_address": p.seed_address,
         "node_count": stats.get("node_count"),
         "edge_count": stats.get("edge_count"),
         "embedding_model": p.embedding_model,

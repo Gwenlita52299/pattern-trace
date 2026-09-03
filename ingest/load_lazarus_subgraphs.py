@@ -74,6 +74,7 @@ def build_patterns(node_rows: list[dict], edge_rows: list[dict],
             name=_pattern_name(sub),
             source="lazarus_confirmed",
             grade="A",
+            provenance="confirmed",
             sub=sub,
         ))
     return rows

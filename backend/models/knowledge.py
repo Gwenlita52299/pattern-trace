@@ -36,7 +36,10 @@ class Pattern(Base):
     id = Column(String(36), primary_key=True, default=_uuid)
     name = Column(String(120), nullable=False)
     source = Column(String(40), nullable=False)  # lazarus_confirmed | lazarus_synth
-    evidence_grade = Column(String(1), nullable=False)  # A | B
+    # issue #10：证据来源性质——confirmed(真实链上样本) | synthetic(合成结构模板)。
+    # provenance 与 evidence_grade 分离：合成样本可参与检索但不得伪装成真实 Grade A 证据。
+    provenance = Column(String(20), nullable=False, server_default="confirmed")
+    evidence_grade = Column(String(1), nullable=False)  # A(confirmed) | B | S(synthetic)
     seed_address = Column(String(62), nullable=False, index=True)
     description = Column(Text, default="")
     canonical_subgraph = Column(JSONB, nullable=False)
@@ -62,6 +65,7 @@ class PatternNegative(Base):
     id = Column(String(36), primary_key=True, default=_uuid)
     name = Column(String(120), nullable=False)
     source = Column(String(40), nullable=False)  # constructed_normal
+    provenance = Column(String(20), nullable=False, server_default="negative")  # negative
     evidence_grade = Column(String(1), nullable=False)  # B
     seed_address = Column(String(62), nullable=False, index=True)
     description = Column(Text, default="")

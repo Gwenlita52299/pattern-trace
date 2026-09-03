@@ -250,13 +250,14 @@ class TestCacheSemantics:
         assert second == first
 
     def test_lj08_prompt_version_changes_key(self):
-        k3 = build_cache_key("gb-v1", "a", "h", "m", PROMPT_VERSION)
-        k4 = build_cache_key("gb-v1", "a", "h", "m", "v4")
-        assert k3 != k4
+        # issue #10：PROMPT_VERSION 升至 v4（候选模式携带 provenance）。
+        k_new = build_cache_key("gb-v1", "a", "h", "m", PROMPT_VERSION)
+        k_old = build_cache_key("gb-v1", "a", "h", "m", "v3")
+        assert k_new != k_old
         client = MockLLMClient(scenario="valid_high")
         cache = InMemoryCache()
         _judge_once(client, cache=cache, prompt_version=PROMPT_VERSION)
-        _judge_once(client, cache=cache, prompt_version="v4")
+        _judge_once(client, cache=cache, prompt_version="v3")
         assert client.calls == 2  # 版本变更 → miss → 重新调用
 
     def test_lj09_builder_version_invalidates_cache(self):

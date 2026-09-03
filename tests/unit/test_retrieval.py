@@ -211,9 +211,12 @@ class FakeSettings:
     wl_iterations = 3
 
 
-def _recall_row(pid, name, *, dist=0.1, struct_sim=0.9, sem_sim=0.8):
+def _recall_row(pid, name, *, dist=0.1, struct_sim=0.9, sem_sim=0.8,
+                source="lazarus_confirmed", provenance="confirmed",
+                evidence_grade="A"):
     return {
-        "id": pid, "name": name, "description": "", "evidence_grade": "A",
+        "id": pid, "name": name, "description": "", "evidence_grade": evidence_grade,
+        "source": source, "provenance": provenance,
         "canonical_subgraph": _chain(6),
         "dist": dist, "struct_sim": struct_sim, "sem_sim": sem_sim,
     }
@@ -266,7 +269,8 @@ class TestFullRetrievalFlow:
         assert isinstance(c, PatternCandidate)
         for attr in ("pattern_id", "name", "canonical_subgraph",
                      "similarity_score", "wl_kernel_score",
-                     "evidence_grade", "difference_note"):
+                     "evidence_grade", "source", "provenance",
+                     "difference_note"):
             assert hasattr(c, attr), attr
         assert 0.0 <= c.similarity_score <= 1.0
         again = retriever.retrieve(_chain(6))

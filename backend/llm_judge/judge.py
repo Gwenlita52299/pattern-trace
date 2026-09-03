@@ -27,7 +27,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low", "no_match"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"  # issue #10：候选模式携带 source/provenance/evidence_status
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -229,10 +229,25 @@ def build_messages(subgraph, candidates, retry_note: str | None = None,
         name = _view(c, "name")
         desc = _view(c, "description", "") or ""
         note = _view(c, "difference_note", None)
-        line = f"pattern_name: {name}\n  {desc}"
+        source = _view(c, "source", "lazarus_confirmed")
+        provenance = _view(c, "provenance", "confirmed")
+        # issue #10：合成样本不是真实链上证据——必须显式携带来源性质，
+        # 并阻止模型把候选自身当作区块链证据引用。
+        line = f"pattern_name: {name}\n  source: {source}\n  provenance: {provenance}"
+        if provenance != "confirmed":
+            line += "\n  evidence_status: not_real_on_chain_evidence"
+        line += f"\n  {desc}"
         if note:
             line += f"\n  difference vs input: {note}"
         lines.append(line)
+
+    synthetic_any = any(
+        _view(c, "provenance", "confirmed") != "confirmed" for c in candidates)
+    if synthetic_any:
+        lines.append(
+            "\nNOTE: One or more candidates are SYNTHETIC structural templates. "
+            "They do not represent a real on-chain transaction or a confirmed case. "
+            "Do not cite the candidate itself as blockchain evidence.")
 
     user_content = "\n".join(lines)
     if retry_note:
