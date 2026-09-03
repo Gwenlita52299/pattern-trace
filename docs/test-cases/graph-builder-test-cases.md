@@ -520,15 +520,17 @@
 - GraphBuilder 只依赖该接口（`_spending_tx_domain`），不直接知道 Esplora endpoint。
 - 尚未实现该接口的 provider 退回 `outspend` + `get_tx` 组合，再退回地址扫描。
 
-**事件循环隔离（暂缓）**
-- 曾用 `asyncio.to_thread` 隔离同步 Esplora 构建到线程池，但在 Python 3.12 +
-  Starlette TestClient 的 `create_task` 后台任务下会令管线卡在 `processing`，故暂回退
-  为同步构建（fixture 构建 ~0.4ms 可忽略阻塞）。live 隔离需要一个不冲突的线程模型。
+**事件循环隔离（issue #12，已实现）**
+- `orchestration._execute` 在 `graph_data_mode == "live"` 时经 `anyio.to_thread.run_sync`
+  把 `seed_block_time` 与 `builder.build` 隔离到 anyio 线程池，不阻塞事件循环。
+- 该写法与 Starlette TestClient 的 anyio blocking portal 同一线程模型，规避 stdlib
+  `asyncio.to_thread` 在 Python 3.12 + TestClient 的 `create_task` 后台任务下的卡死
+  （后者曾在 PR #11 令管线卡在 `processing`，已回退）。fixture 模式保持同步，测试/CI 稳定。
 
 **验收**
 - [x] fixture 与 live provider 均实现 `resolve_spending_transaction`，返回语义一致
 - [x] builder 优先走领域接口；已花 UTXO 正确展开、未花计 unspent、数据源故障计 degraded
-- [ ] live 同步构建隔离到线程池后不阻塞 FastAPI 事件循环（暂缓，需不冲突的线程模型）
+- [x] live 同步构建经 anyio 线程池隔离，不阻塞 FastAPI 事件循环（healthz/polling 并发安全）
 
 ---
 

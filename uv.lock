@@ -964,6 +964,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "alembic" },
+    { name = "anyio" },
     { name = "arq" },
     { name = "async-lru" },
     { name = "bcrypt" },
@@ -993,6 +994,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "alembic", specifier = ">=1.13" },
+    { name = "anyio", specifier = ">=4.0" },
     { name = "arq", specifier = ">=0.26" },
     { name = "async-lru", specifier = ">=2.0" },
     { name = "bcrypt", specifier = ">=4.1" },

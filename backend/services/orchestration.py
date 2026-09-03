@@ -19,6 +19,7 @@ import asyncio
 import time
 from datetime import UTC, datetime
 
+import anyio
 from sqlalchemy import select, update
 
 from ..core.config import get_settings
@@ -165,6 +166,28 @@ async def run_analysis(judgment_id: str, session=None) -> str | None:
             engine.dispose()
 
 
+def _sync_seed_block_time(provider, address: str) -> float | None:
+    """同步取种子地址的最近区块时间（供 live/fixture 共用）。"""
+    return provider.seed_block_time(address) if hasattr(provider, "seed_block_time") else None
+
+
+async def _isolated_sync(live: bool, fn, /, *args, **kwargs):
+    """live 模式把同步图构建隔离到线程池，避免阻塞 FastAPI 事件循环。
+
+    issue #12：实时 Esplora 网络请求/重试等待不得阻塞事件循环。这里用
+    ``anyio.to_thread.run_sync`` —— 与 Starlette TestClient 的 anyio blocking
+    portal 同一线程模型 —— 而非 stdlib ``asyncio.to_thread`` 的默认事件循环池
+    （后者在 Python 3.12 + TestClient 的 create_task 后台任务路径下会令管线卡死
+    在 processing，CI 复现并已回退，见 763668d）。
+
+    fixture 模式（graph_data_mode != "live"）保持同步：构建 ~0.4ms，可忽略阻塞，
+    且不引入线程切换，避免打破既有测试/CI。
+    """
+    if live:
+        return await anyio.to_thread.run_sync(fn, *args, **kwargs)
+    return fn(*args, **kwargs)
+
+
 async def _execute(session, row: Judgment, settings, started: float) -> str:
     provider, _seeds = build_provider(settings)
 
@@ -176,20 +199,22 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     builder = GraphBuilder(coinjoin_txids=coinjoin_txids)
     # out_of_range 终止需要时间窗基准（spec §3）：种子最近活动时刻；
     # live 模式下该取值会进 Redis 缓存，BFS 首次展开直接命中。
-    # 注：此前为满足 issue #3「事件循环隔离」把构建隔离到 asyncio.to_thread，但该写法
-    # 在 Python 3.12 + Starlette TestClient 的 create_task 后台任务下会令管线卡在
-    # processing，故回退为同步构建（fixture 构建 ~0.4ms，可忽略阻塞）。live 隔离另议。
-    seed_time = provider.seed_block_time(row.address) \
-        if hasattr(provider, "seed_block_time") else None
+    # issue #12：live 模式（graph_data_mode == "live"）的网络请求/重试等待经
+    # _isolated_sync 隔离到 anyio 线程池，不阻塞事件循环；fixture 模式保持同步
+    # （构建 ~0.4ms，可忽略阻塞），避免引入线程切换破坏既有测试/CI。
+    live = settings.graph_data_mode == "live"
+    seed_time = await _isolated_sync(
+        live, _sync_seed_block_time, provider, row.address)
     # issue #7 data_as_of：本次分析使用的链上数据时间点（种子/发起区块时间）；
     # 无法取得统一链上时间时，记录本次查询时间（now UTC）。
     data_as_of = (
         datetime.fromtimestamp(seed_time, UTC) if seed_time is not None
         else datetime.now(UTC)
     )
-    subgraph = builder.build(row.address, provider, hops=row.hops,
-                             time_window_days=row.time_window_days,
-                             seed_block_time=seed_time)
+    subgraph = await _isolated_sync(
+        live, builder.build, row.address, provider,
+        hops=row.hops, time_window_days=row.time_window_days,
+        seed_block_time=seed_time)
     if subgraph.stats.degraded and len(subgraph.nodes) <= 1:
         # REL-05：所有扩展单元都失败 → 数据源完全分区，显式进终态
         raise DataSourceUnavailable(
