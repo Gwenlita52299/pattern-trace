@@ -19,8 +19,10 @@
 //      该目标地址从本交易收到的金额（资金离开交易进入 B，即目标地址 B 的流入）。
 //      in_btc 由 (dst_value_btc / value_ratio) 反推（value_ratio = dst_value / total_input），
 //      不可推导时回退为输出额合计（忽略手续费）。展示时沿 A→B 流向标为「出{in_btc}→入{out_btc}」。
-//   4. is_stopped_expansion 交易（coinjoin/crosschain/时间窗外）无输出地址，不产生 A→B 边，
-//      在流式视图中自然终止（该交易不继续流动）。
+//   4. is_stopped_expansion 交易（coinjoin/crosschain/时间窗外）无输出地址，不产生 A→B 边；
+//      在流式视图中渲染为**独立终止交易节点**（kind=terminalTransaction，id=tx:<txid>），
+//      每个输入地址产生一条 A→终止交易边，视图中流到此终止（该交易不再继续流动）。
+//      Unknown OP_RETURN 不会被后端标 is_stopped_expansion（它继续扩展），故不会成为终止节点。
 //   5. 高亮映射：canonical 证据 ID（addr:/tx:/edge:）→ 本视图的节点/边 ID 集合，见 resolveHighlightIds。
 import type { GraphEdge, GraphNode } from "@/store/analysis";
 
@@ -77,6 +79,22 @@ interface TxGroup {
   opReturnProtocol: string | null;
 }
 
+/** 由交易聚合事实推导出终止原因（issue #9）。 */
+export function stopReasonOf(g: Pick<TxGroup, "isRemixer" | "isCrosschain">):
+  "coinjoin" | "crosschain" | "out_of_range" {
+  if (g.isRemixer) return "coinjoin";
+  if (g.isCrosschain) return "crosschain";
+  return "out_of_range";
+}
+
+/** 终止交易在流式视图中渲染为一个 terminalTransaction 节点（issue #9）。 */
+export interface TerminalNode extends GraphNode {
+  kind: "terminalTransaction";
+  txid: string;
+  stop_reason: "coinjoin" | "crosschain" | "out_of_range";
+  protocol: string | null;
+}
+
 function classifyAndGroup(
   edges: GraphEdge[],
 ): { txs: Map<string, TxGroup>; orphans: GraphEdge[] } {
@@ -121,7 +139,17 @@ function classifyAndGroup(
     } else if (srcTx && dstIsAddr) {
       // tx→addr 输出边：B 从 tx 中收到输出
       const g = group(srcTx);
-      g.outputs.set(e.target, e);
+      const existing = g.outputs.get(e.target);
+      if (existing) {
+        // issue #9 「不得覆盖」：同一交易多个输出到同一地址时聚合 dst_value_btc，
+        // 其余事实字段沿用首个输出边（金额展示以聚合后的 dst 为准）。
+        g.outputs.set(e.target, {
+          ...existing,
+          dst_value_btc: (existing.dst_value_btc ?? 0) + (e.dst_value_btc ?? 0),
+        });
+      } else {
+        g.outputs.set(e.target, e);
+      }
       g.txLayer = g.txLayer || e.tx_layer || "";
       g.isRemixer = g.isRemixer || !!e.is_remixer;
       g.isCrosschain = g.isCrosschain || !!e.is_crosschain;
@@ -182,12 +210,65 @@ export function toAddressFlow(subgraph: {
   const { txs } = classifyAndGroup(edges);
 
   const flowEdges: FlowEdge[] = [];
+  const flowNodes: GraphNode[] = [];
   const seenEdgeId = new Set<string>();
-  for (const g of txs.values()) {
-    // 无输出地址（stopped / 时间窗外）→ 不产生 A→B 边，流到此终止
-    if (g.outputs.size === 0) continue;
-    const { totalInput } = txAggregateAmounts(g);
+  const seenTerminalId = new Set<string>();
 
+  for (const g of txs.values()) {
+    // --- 终止交易（issue #9）：无输出地址 + is_stopped → terminalTransaction 节点 ---
+    if (g.outputs.size === 0) {
+      if (g.isStopped) {
+        const terminalInputs = Array.from(g.inputs).filter((a) => addrNodeById.has(a));
+        if (terminalInputs.length === 0) continue;
+        const txNodeId = `tx:${g.txid}`;
+        const stopReason = stopReasonOf(g);
+        const { totalInput } = txAggregateAmounts(g);
+        const inputLayer = Math.max(
+          0,
+          ...terminalInputs.map((a) => addrNodeById.get(a)?.first_layer ?? 0),
+        );
+        if (!seenTerminalId.has(txNodeId)) {
+          seenTerminalId.add(txNodeId);
+          flowNodes.push({
+            id: txNodeId,
+            kind: "terminalTransaction",
+            label: g.txid.slice(0, 16),
+            txid: g.txid,
+            stop_reason: stopReason,
+            protocol: g.opReturnProtocol,
+            op_return_protocol: g.opReturnProtocol,
+            first_layer: inputLayer + 1, // 终止节点位于其输入地址之后（流向下游）
+            is_stopped_expansion: true,
+            is_remixer: g.isRemixer,
+            is_crosschain: g.isCrosschain,
+          } satisfies TerminalNode);
+        }
+        for (const srcId of terminalInputs) {
+          const edgeId = `flow:${srcId}->${txNodeId}:${g.txid}`;
+          if (seenEdgeId.has(edgeId)) continue;
+          seenEdgeId.add(edgeId);
+          flowEdges.push({
+            id: edgeId,
+            source: srcId,
+            target: txNodeId,
+            txid: g.txid,
+            tx_layer: g.txLayer || undefined,
+            in_btc: totalInput,
+            out_btc: 0,
+            is_stopped_expansion: true,
+            is_remixer: g.isRemixer,
+            is_crosschain: g.isCrosschain,
+            op_return_protocol: g.opReturnProtocol ?? null,
+            total_num_inputs: g.inputs.size,
+            total_num_outputs: 0,
+          });
+        }
+      }
+      continue;
+    }
+
+    // --- 普通交易（有输出地址）→ A→B 流边，金额语义保持 FE-14/15 不变 ---
+    const { totalInput } = txAggregateAmounts(g);
     for (const srcId of g.inputs) {
       if (!addrNodeById.has(srcId)) continue;
       for (const [dstId, outEdge] of g.outputs) {
@@ -217,12 +298,12 @@ export function toAddressFlow(subgraph: {
     }
   }
 
-  // 排序保证输出稳定：节点按 id，边按 id
-  const flowNodes = Array.from(addrNodeById.values()).sort((a, b) =>
+  // 排序保证输出稳定：节点（ address + terminalTransaction）按 id，边按 id
+  const flowAllNodes = [...addrNodeById.values(), ...flowNodes].sort((a, b) =>
     a.id.localeCompare(b.id),
   );
   flowEdges.sort((a, b) => a.id.localeCompare(b.id));
-  return { nodes: flowNodes, edges: flowEdges };
+  return { nodes: flowAllNodes, edges: flowEdges };
 }
 
 /**
@@ -245,6 +326,9 @@ export function resolveHighlightIds(
     } else if (id.startsWith(TX_PREFIX)) {
       const txid = txidOfNodeId(id);
       if (txid) {
+        // terminalTransaction 节点 id 即 tx:<txid>：直接高亮该终止节点（issue #9）
+        const txNodeId = `tx:${txid}`;
+        if (nodeIds.has(txNodeId)) out.add(txNodeId);
         for (const e of flow.edges) {
           if (e.txid === txid) {
             out.add(e.id);
