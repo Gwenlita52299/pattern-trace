@@ -56,19 +56,48 @@ def build_download_url(base_path: str, report_id: str, secret: str,
 # ---------------------------------------------------------------------------
 # 报告素材与渲染
 # ---------------------------------------------------------------------------
+def _fmt_time(v) -> str:
+    """把 datetime 字段格式化为可读字符串；空值/缺省返回 '-'。"""
+    if v is None:
+        return "-"
+    if isinstance(v, str):
+        return v
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
+
+
 def collect_case_entries(session, case_id: str) -> list[dict]:
-    """每个关联地址取最新一条 completed judgment 作为报告素材。"""
+    """每个关联地址取 **冻结** 的 completed judgment 作为报告素材（issue #7）。
+
+    优先使用 `CaseAddress.judgment_id`（该案件关联地址的「当前」分析结论，报告
+    生成时即捕获/落盘，后续重新分析不会影响已生成报告）；指针为空（历史地址或
+    旧数据）时回退到地址的最新 completed judgment，并把该指针回写冻结。
+    报告绝不在此处查询「全局最新」judgment 而绕过案件指针。
+    """
     links = session.execute(
         select(CaseAddress).where(CaseAddress.case_id == case_id)
         .order_by(CaseAddress.added_at)).scalars().all()
     entries = []
     for link in links:
-        j = session.execute(
-            select(Judgment)
-            .where(Judgment.address == link.address,
-                   Judgment.status == "completed")
-            .order_by(Judgment.created_at.desc()).limit(1)).scalar_one_or_none()
-        entries.append({"address": link.address, "judgment": j})
+        j: Judgment | None = None
+        if link.judgment_id:
+            j = session.get(Judgment, link.judgment_id)
+            # 指针仅指向 completed 结论；指向其它状态则视为无效并回退
+            if j is not None and j.status != "completed":
+                j = None
+        if j is None:
+            j = session.execute(
+                select(Judgment)
+                .where(Judgment.address == link.address,
+                       Judgment.status == "completed")
+                .order_by(Judgment.created_at.desc(),
+                          Judgment.id.desc()).limit(1)).scalar_one_or_none()
+            if j is not None:
+                link.judgment_id = j.id  # 冻结：回写指针，后续生成不再重查全局最新
+        entries.append({"address": link.address, "judgment": j,
+                        "case_address": link})
+    session.commit()  # 落盘冻结指针（若发生回退写入）
     return entries
 
 
@@ -91,9 +120,13 @@ def _render_html(case: Case, case_id: str, entries: list[dict]) -> str:
         evidence_html = "".join(
             f"<div class='mono'>{_escape(eid)}</div>"
             for eid in (j.evidence or []))
-        chain = (f"hash:{(j.subgraph_hash or '')[:16]}<br/>"
+        # issue #7：报告冻结 judgment_id + 时间字段，重建/下载不再重查最新 Judgment
+        chain = (f"judgment:{_escape(getattr(j, 'id', '')[:16])}<br/>"
+                 f"hash:{(j.subgraph_hash or '')[:16]}<br/>"
                  f"model:{_escape(j.model or '')}<br/>"
-                 f"prompt:{j.prompt_version} · builder:{j.builder_version}")
+                 f"prompt:{j.prompt_version} · builder:{j.builder_version}<br/>"
+                 f"concluded:{_escape(_fmt_time(getattr(j, 'concluded_at', None)))}<br/>"
+                 f"as_of:{_escape(_fmt_time(getattr(j, 'data_as_of', None)))}")
         rows.append(
             f"<tr><td class='mono'>{addr}</td>"
             f"<td><b>{j.risk_level}</b></td><td>{conf}</td>"
@@ -175,6 +208,9 @@ def _render_pdf(case: Case, case_id: str, entries: list[dict]) -> bytes:
         _line(f"  evidence chain: hash={(j.subgraph_hash or '')[:24]} "
               f"model={j.model} prompt={j.prompt_version} "
               f"builder={j.builder_version}")
+        _line(f"  judgment={getattr(j, 'id', '')[:16]} "
+              f"concluded={_fmt_time(getattr(j, 'concluded_at', None))} "
+              f"data_as_of={_fmt_time(getattr(j, 'data_as_of', None))}")
         for eid in (j.evidence or [])[:10]:
             _line(f"    - {eid}")
         pdf.ln(3)

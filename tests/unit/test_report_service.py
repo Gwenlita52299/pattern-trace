@@ -14,7 +14,6 @@ import pytest
 
 from backend.core.config import get_settings
 from backend.services.report_service import (
-    _escape,
     _latin,
     _render_html,
     _render_pdf,
@@ -112,6 +111,24 @@ class TestRenderHtml:
         # evidence None → 空 evidence 区域（91-93 行遍历空列表）
         assert "hash:<br/>" in rows  # subgraph_hash None → 空前缀
         assert "model:<br/>" in rows  # model None → 空
+
+    def test_full_row_includes_time_fields(self):
+        """issue #7：报告证据链冻结 judgment_id + concluded_at/data_as_of。"""
+        from datetime import UTC, datetime
+
+        case = SimpleNamespace(title="T", status="open")
+        j = SimpleNamespace(
+            id="j-" + "a" * 32, risk_level="high", confidence=0.9,
+            recommended_action="block", reasoning="r", evidence=["addr:x"],
+            subgraph_hash="a" * 64, model="deepseek-chat",
+            prompt_version="v2", builder_version="v1",
+            concluded_at=datetime(2026, 1, 1, 12, 5, tzinfo=UTC),
+            data_as_of=datetime(2026, 1, 1, 11, 58, tzinfo=UTC),
+        )
+        rows = _render_html(case, "c", [_fake_address_pair(j)])
+        assert "judgment:j-aaaaaaaaaaaaaa" in rows  # j.id[:16] 冻结
+        assert "2026-01-01T12:05:00+00:00" in rows  # concluded_at
+        assert "2026-01-01T11:58:00+00:00" in rows  # data_as_of
 
 
 # ---------------------------------------------------------------------------

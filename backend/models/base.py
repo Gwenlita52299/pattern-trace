@@ -203,6 +203,10 @@ class Judgment(Base):
     thinking = Column(Text)             # Qwen3 <think> 审计留痕（llm-judge §7）
     failed_at = Column(DateTime(timezone=True))
 
+    # 结论/数据时间戳（issue #7）：history Judgment 时间版本化的证据链时间字段
+    concluded_at = Column(DateTime(timezone=True))  # 进入 completed/failed 的时间
+    data_as_of = Column(DateTime(timezone=True))    # 本次分析使用的链上数据时间点
+
     created_by = Column(String(36), ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

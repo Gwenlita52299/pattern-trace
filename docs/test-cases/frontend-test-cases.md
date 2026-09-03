@@ -710,3 +710,27 @@
 - 折叠节点仍保留其 "＋/−" 圆钮，可再次展开恢复下游，无需离开当前视图
 - 多个节点分别折叠时，隐藏集合取各下游集合并集，且不包含任何折叠节点自身（折叠节点保持可见）
 - 现有地址流变换、跳数（depth）过滤、节点拖动和 evidence 高亮行为不变
+
+---
+
+## FE-36 Judgment 结论时间展示（issue #7）
+
+- **优先级**：P1
+- **来源**：GitHub issue #7 —— 前端显示 Judgment 结论时间（concluded_at / data_as_of）
+
+**前置条件**
+- 某地址已完成分析（/analyze/:id 到达 completed 终态）
+- 该地址已关联到某案件
+
+**操作步骤**
+1. 进入 /analyze/<juidgment_id>，查看 VerdictCard
+2. 进入 /cases/<case_id>，查看关联地址列表
+3. 对比两次分析（同一地址不同 hops）的结论时间
+
+**预期结果**
+- /analyze 页 VerdictCard 展示 `concluded`（concluded_at，UTC YYYY-MM-DD HH:MM）与
+  `data as of`（data_as_of）两行时间
+- /cases 页每个有关联分析的地址展示「结论于 <本地时间>」
+- 多个历史 Judgment 各自显示其结论时间，新分析不覆盖旧结论时间
+
+---
