@@ -6,7 +6,8 @@
      (src, dst) 一条 A→B 有向边，边 id 形如 flow:<src>-><dst>:<txid>；
   3. 每条边携带 in_btc（交易输入侧总额）与 out_btc（该目标地址接收额）；
      in_btc 由 (dst_value_btc / value_ratio) 反推，不可推导时回退为输出额合计；
-  4. is_stopped_expansion 交易（coinjoin/crosschain/时间窗外）无输出地址，不产生 A→B 边；
+  4. is_stopped_expansion 交易（coinjoin/crosschain/时间窗外）无输出地址 → 渲染为
+     独立 terminalTransaction 节点（id=tx:<txid>），每个输入地址产生一条 A→终止交易边；
   5. resolve_highlight_ids 把 canonical 证据 id（addr:/tx:/edge:）映射为本视图节点/边 id。
 """
 from __future__ import annotations
@@ -55,6 +56,15 @@ def _agg_amounts(tx_group: dict) -> tuple[float, float]:
     if total_input <= 0:
         total_input = total_output
     return total_input, total_output
+
+
+def stop_reason_of(g: dict) -> str:
+    """由终止交易聚合事实推导停止原因（issue #9）。"""
+    if g["is_remixer"]:
+        return "coinjoin"
+    if g["is_crosschain"]:
+        return "crosschain"
+    return "out_of_range"
 
 
 def to_address_flow(subgraph: dict) -> dict:
@@ -106,7 +116,16 @@ def to_address_flow(subgraph: dict) -> dict:
             g["op_return_protocol"] = g["op_return_protocol"] or e.get("op_return_protocol")
         elif src_tx and is_address_id(dst):
             g = group(src_tx)
-            g["outputs"][dst] = e
+            existing = g["outputs"].get(dst)
+            if existing is not None:
+                # issue #9 「不得覆盖」：同一交易多个输出到同一地址时聚合 dst_value_btc，
+                # 其余事实字段沿用首个输出边。
+                merged = dict(existing)
+                merged["dst_value_btc"] = (_amt(existing.get("dst_value_btc"))
+                                           + _amt(e.get("dst_value_btc")))
+                g["outputs"][dst] = merged
+            else:
+                g["outputs"][dst] = e
             g["tx_layer"] = g["tx_layer"] or e.get("tx_layer") or ""
             g["is_remixer"] = g["is_remixer"] or bool(e.get("is_remixer"))
             g["is_crosschain"] = g["is_crosschain"] or bool(e.get("is_crosschain"))
@@ -115,9 +134,58 @@ def to_address_flow(subgraph: dict) -> dict:
         # 其它形态（地址→地址、摘要节点边）忽略
 
     flow_edges: list[dict] = []
+    flow_nodes: list[dict] = []
     seen: set[str] = set()
+    seen_terminal: set[str] = set()
     for g in txs.values():
+        # 终止交易（issue #9）：无输出 + is_stopped → terminalTransaction 节点
         if not g["outputs"]:
+            if g["is_stopped"]:
+                terminal_inputs = sorted(
+                    a for a in g["inputs"] if a in addr_node_by_id)
+                if not terminal_inputs:
+                    continue
+                tx_node_id = f"tx:{g['txid']}"
+                stop_reason = stop_reason_of(g)
+                total_input, _ = _agg_amounts(g)
+                input_layer = max(
+                    [addr_node_by_id[a].get("first_layer") or 0
+                     for a in terminal_inputs] or [0])
+                if tx_node_id not in seen_terminal:
+                    seen_terminal.add(tx_node_id)
+                    flow_nodes.append({
+                        "id": tx_node_id,
+                        "kind": "terminalTransaction",
+                        "label": g["txid"][:16],
+                        "txid": g["txid"],
+                        "stop_reason": stop_reason,
+                        "protocol": g["op_return_protocol"],
+                        "op_return_protocol": g["op_return_protocol"],
+                        "first_layer": input_layer + 1,
+                        "is_stopped_expansion": True,
+                        "is_remixer": g["is_remixer"],
+                        "is_crosschain": g["is_crosschain"],
+                    })
+                for src_id in terminal_inputs:
+                    eid = f"flow:{src_id}->{tx_node_id}:{g['txid']}"
+                    if eid in seen:
+                        continue
+                    seen.add(eid)
+                    flow_edges.append({
+                        "id": eid,
+                        "source": src_id,
+                        "target": tx_node_id,
+                        "txid": g["txid"],
+                        "tx_layer": g["tx_layer"] or None,
+                        "in_btc": total_input,
+                        "out_btc": 0.0,
+                        "is_stopped_expansion": True,
+                        "is_remixer": g["is_remixer"],
+                        "is_crosschain": g["is_crosschain"],
+                        "op_return_protocol": g["op_return_protocol"],
+                        "total_num_inputs": len(g["inputs"]),
+                        "total_num_outputs": 0,
+                    })
             continue
         total_input, _ = _agg_amounts(g)
         for src_id in sorted(g["inputs"]):
@@ -147,7 +215,8 @@ def to_address_flow(subgraph: dict) -> dict:
                     "op_return_protocol": g["op_return_protocol"],
                 })
 
-    flow_nodes = sorted(addr_node_by_id.values(), key=lambda n: n["id"])
+    flow_nodes.extend(addr_node_by_id.values())
+    flow_nodes.sort(key=lambda n: n["id"])
     flow_edges.sort(key=lambda e: e["id"])
     return {"nodes": flow_nodes, "edges": flow_edges}
 
@@ -162,6 +231,9 @@ def resolve_highlight_ids(highlight_ids, flow: dict) -> set[str]:
         elif hid.startswith(TX_PREFIX):
             txid = txid_of_node_id(hid)
             if txid:
+                tx_node_id = f"tx:{txid}"
+                if tx_node_id in node_ids:
+                    out.add(tx_node_id)
                 for e in flow["edges"]:
                     if e["txid"] == txid:
                         out.add(e["id"])

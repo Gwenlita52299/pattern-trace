@@ -6,16 +6,18 @@
   3. 每条边带 in_btc（交易输入侧总额）与 out_btc（目标地址接收额）；
      in_btc 由 (dst_value_btc / value_ratio) 反推；
   4. 多输入多输出交易做满二分；
-  5. is_stopped_expansion 交易无输出地址 → 不产生 A→B 边；
-  6. resolve_highlight_ids 把 canonical 证据 id 映射到本视图节点/边 id。
+  5. is_stopped_expansion 交易无输出地址 → 渲染为独立 terminalTransaction 节点
+     （id=tx:<txid>），每个输入地址产生一条 A→终止交易边；
+  6. resolve_highlight_ids 把 canonical 证据 id 映射到本视图节点/边 id（含终止节点）。
 """
 from __future__ import annotations
 
 import pytest
 
 from tests.unit._address_flow_py import (
-    to_address_flow,
     resolve_highlight_ids,
+    stop_reason_of,
+    to_address_flow,
 )
 
 
@@ -26,7 +28,8 @@ def _node(nid, kind="address", first_layer=0, **kw):
 
 
 def _edge(eid, src, dst, txid=None, value_ratio=None, dst_value_btc=None,
-          is_stopped_expansion=False, op_return_protocol=None):
+          is_stopped_expansion=False, is_remixer=False, is_crosschain=False,
+          op_return_protocol=None):
     d = {"id": eid, "source": src, "target": dst}
     if txid is not None:
         d["txid"] = txid
@@ -36,6 +39,10 @@ def _edge(eid, src, dst, txid=None, value_ratio=None, dst_value_btc=None,
         d["dst_value_btc"] = dst_value_btc
     if is_stopped_expansion:
         d["is_stopped_expansion"] = True
+    if is_remixer:
+        d["is_remixer"] = True
+    if is_crosschain:
+        d["is_crosschain"] = True
     if op_return_protocol is not None:
         d["op_return_protocol"] = op_return_protocol
     return d
@@ -110,7 +117,7 @@ def test_multi_input_multi_output_full_bipartite():
         assert e["out_btc"] == pytest.approx(1.0)
 
 
-def test_stopped_tx_without_outputs_yields_no_edge():
+def test_stopped_tx_without_outputs_becomes_terminal_node():
     subgraph = {
         "nodes": [_node("addr:seed"), _node("tx:CJ", kind="transaction")],
         "edges": [
@@ -119,8 +126,118 @@ def test_stopped_tx_without_outputs_yields_no_edge():
         ],
     }
     flow = to_address_flow(subgraph)
-    assert len(flow["nodes"]) == 1
-    assert flow["edges"] == []
+    node_ids = {n["id"] for n in flow["nodes"]}
+    assert node_ids == {"addr:seed", "tx:CJ"}
+    term = next(n for n in flow["nodes"] if n["kind"] == "terminalTransaction")
+    assert term["id"] == "tx:CJ"
+    assert term["txid"] == "CJ"
+    assert term["stop_reason"] == "out_of_range"
+    assert term["is_stopped_expansion"] is True
+    assert len(flow["edges"]) == 1
+    e = flow["edges"][0]
+    assert e["id"] == "flow:addr:seed->tx:CJ:CJ"
+    assert e["source"] == "addr:seed"
+    assert e["target"] == "tx:CJ"
+    assert e["is_stopped_expansion"] is True
+    assert e["in_btc"] == pytest.approx(0.5)
+
+
+def test_coinjoin_terminal_node_shows_mixer_stop_reason():
+    subgraph = {
+        "nodes": [_node("addr:A", first_layer=0), _node("addr:B", first_layer=0),
+                  _node("tx:CJ", kind="transaction")],
+        "edges": [
+            _edge("e1", "addr:A", "tx:CJ", txid="CJ", dst_value_btc=2.0,
+                  is_stopped_expansion=True, is_remixer=True),
+            _edge("e2", "addr:B", "tx:CJ", txid="CJ", dst_value_btc=3.0,
+                  is_stopped_expansion=True, is_remixer=True),
+        ],
+    }
+    flow = to_address_flow(subgraph)
+    term = next(n for n in flow["nodes"] if n["kind"] == "terminalTransaction")
+    assert term["stop_reason"] == "coinjoin"
+    assert term["txid"] == "CJ"
+    assert term["is_remixer"] is True
+    edge_ids = {e["id"] for e in flow["edges"]}
+    assert edge_ids == {
+        "flow:addr:A->tx:CJ:CJ",
+        "flow:addr:B->tx:CJ:CJ",
+    }
+
+
+def test_crosschain_terminal_node_shows_protocol():
+    subgraph = {
+        "nodes": [_node("addr:A", first_layer=0), _node("tx:CC", kind="transaction")],
+        "edges": [
+            _edge("e1", "addr:A", "tx:CC", txid="CC", dst_value_btc=1.0,
+                  is_stopped_expansion=True, is_crosschain=True,
+                  op_return_protocol="thorchain"),
+        ],
+    }
+    flow = to_address_flow(subgraph)
+    term = next(n for n in flow["nodes"] if n["kind"] == "terminalTransaction")
+    assert term["stop_reason"] == "crosschain"
+    assert term["protocol"] == "thorchain"
+    assert term["is_crosschain"] is True
+
+
+def test_unknown_op_return_not_terminal_and_expands():
+    # Unknown OP_RETURN 不是终止类型：后端不标 is_stopped_expansion → 正常扩展为 A→B 流边。
+    subgraph = {
+        "nodes": [_node("addr:A", first_layer=0), _node("tx:T", kind="transaction"),
+                  _node("addr:B", first_layer=1)],
+        "edges": [
+            _edge("e1", "addr:A", "tx:T", txid="T", dst_value_btc=1.0),
+            _edge("e2", "tx:T", "addr:B", txid="T", value_ratio=0.4,
+                  dst_value_btc=0.4),
+        ],
+    }
+    flow = to_address_flow(subgraph)
+    assert all(n["kind"] != "terminalTransaction" for n in flow["nodes"])
+    assert len(flow["edges"]) == 1
+    assert flow["edges"][0]["target"] == "addr:B"
+
+
+def test_multi_output_same_address_amount_aggregated_not_overwritten():
+    # 同一交易两个输出到同一地址：金额聚合，不得覆盖（issue #9）。
+    subgraph = {
+        "nodes": [_node("addr:A"), _node("tx:T", kind="transaction"),
+                  _node("addr:B")],
+        "edges": [
+            _edge("in", "addr:A", "tx:T", txid="T", dst_value_btc=2.0),
+            _edge("out1", "tx:T", "addr:B", txid="T", value_ratio=0.25,
+                  dst_value_btc=0.5),
+            _edge("out2", "tx:T", "addr:B", txid="T", value_ratio=0.25,
+                  dst_value_btc=0.5),
+        ],
+    }
+    flow = to_address_flow(subgraph)
+    assert len(flow["edges"]) == 1
+    e = flow["edges"][0]
+    assert e["id"] == "flow:addr:A->addr:B:T"
+    # dst_value_btc = 0.5 + 0.5 = 1.0，不得只保留最后一个输出（0.5）
+    assert e["out_btc"] == pytest.approx(1.0)
+    # total_input = dst / ratio = 1.0 / 0.25 = 4.0
+    assert e["in_btc"] == pytest.approx(4.0)
+
+
+def test_resolve_highlight_terminal_node_highlighted_via_txid():
+    subgraph = {
+        "nodes": [_node("addr:A", first_layer=0), _node("tx:CJ", kind="transaction")],
+        "edges": [
+            _edge("e1", "addr:A", "tx:CJ", txid="CJ", dst_value_btc=0.5,
+                  is_stopped_expansion=True, is_remixer=True),
+        ],
+    }
+    flow = to_address_flow(subgraph)
+    out = resolve_highlight_ids({"tx:CJ"}, flow)
+    assert out == {"flow:addr:A->tx:CJ:CJ", "addr:A", "tx:CJ"}
+
+
+def test_stop_reason_of_derivation():
+    assert stop_reason_of({"is_remixer": True, "is_crosschain": False}) == "coinjoin"
+    assert stop_reason_of({"is_remixer": False, "is_crosschain": True}) == "crosschain"
+    assert stop_reason_of({"is_remixer": False, "is_crosschain": False}) == "out_of_range"
 
 
 def test_resolve_highlight_tx_expands_to_edges_and_endpoints():

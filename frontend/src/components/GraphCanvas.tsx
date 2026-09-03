@@ -105,11 +105,51 @@ const AddressNode = memo(function AddressNode({
   );
 });
 
-const nodeTypes = { address: AddressNode };
+/**
+ * 终止交易节点（issue #9）：CoinJoin / Crosschain / Out of Range 等停止扩展的交易
+ * 在地址流式视图中渲染为独立 terminal 节点，展示停止原因与协议。
+ */
+const TerminalNode = memo(function TerminalNode({ data }: { data: NodeData }) {
+  const raw = data.raw;
+  const hlClass = isHighlighted(raw.id);
+  const stopReason = (raw.stop_reason ?? "out_of_range") as string;
+  const protocolLabel = raw.is_crosschain && raw.protocol ? ` · ${raw.protocol}` : "";
+  const isMixer = raw.is_remixer;
+  return (
+    <div
+      role="button"
+      aria-label={`terminal transaction ${raw.txid ?? raw.id}`}
+      className={`relative rounded-lg border px-3 py-2 text-xs shadow-sm cursor-pointer transition-shadow ${
+        isMixer
+          ? "border-purple-500 border-2 bg-purple-50"
+          : raw.is_crosschain
+            ? "border-blue-500 border-2 bg-blue-50"
+            : "border-slate-400 border-2 bg-slate-50"
+      }${hlClass}`}
+      style={{ minWidth: 150 }}
+    >
+      <div className="flex items-center gap-1 font-mono text-[10px] text-slate-700">
+        {isMixer && <span aria-label="mixer">♻</span>}
+        terminal tx:{stopReason}
+      </div>
+      <div className="break-all font-mono text-[10px] text-slate-600">
+        {(raw.txid ?? raw.id).slice(0, 18)}
+        {protocolLabel}
+      </div>
+    </div>
+  );
+});
+
+const nodeTypes = { address: AddressNode, terminalTransaction: TerminalNode };
 
 function flowAmountLabel(e: FlowEdge): string {
   const outAmt = e.in_btc ?? 0; // 出边：资金离开源地址进入交易（源侧流出额）
   const inAmt = e.out_btc ?? 0; // 入边：资金进入目标地址（目标侧接收额）
+  // 终止交易边（target=tx:<txid>，issue #9）：资金进入停止扩展的交易，无输出地址，
+  // 只标注源侧流出额，避免出现误导性的「→入0」。
+  if (e.target.startsWith("tx:")) {
+    return outAmt > 0 ? `出${outAmt.toFixed(4)}` : "";
+  }
   if (inAmt > 0 || outAmt > 0) {
     // 沿 A→B 流向：出(离开A) → 入(进入B)
     return `出${outAmt.toFixed(4)}→入${inAmt.toFixed(4)}`;
@@ -213,7 +253,7 @@ function buildFlow(
       layoutPos[n.id] = lp;
       rfNodes.push({
         id: n.id,
-        type: "address", // 地址流式视图只有 address 节点
+        type: n.kind === "terminalTransaction" ? "terminalTransaction" : "address",
         position: posMap[n.id] ?? lp, // 已见节点沿用已有/拖拽位置，新节点取布局位置
         data: {
           raw: n,

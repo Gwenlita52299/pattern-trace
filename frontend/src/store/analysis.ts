@@ -23,6 +23,15 @@ export interface GraphNode {
   total_sent_btc?: number;
   utxo_count?: number;
   direct_related_to_lazarus?: boolean;
+  // 终止交易节点（issue #9）：前端在地址流式变换中合成 terminalTransaction 节点，
+  // 携带 txs 聚合而来的事实字段——txid、停止原因、协议、混币/跨链标志。
+  txid?: string;
+  stop_reason?: "coinjoin" | "crosschain" | "out_of_range" | string;
+  protocol?: string | null;
+  is_stopped_expansion?: boolean;
+  is_remixer?: boolean;
+  is_crosschain?: boolean;
+  op_return_protocol?: string | null;
 }
 
 export interface GraphEdge {
