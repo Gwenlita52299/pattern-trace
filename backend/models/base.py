@@ -207,6 +207,10 @@ class Judgment(Base):
     concluded_at = Column(DateTime(timezone=True))  # 进入 completed/failed 的时间
     data_as_of = Column(DateTime(timezone=True))    # 本次分析使用的链上数据时间点
 
+    # 数据质量（issue #8）：部分上游分支失败时保留部分子图并标记 degraded/需人工复核
+    data_quality = Column(String(20), default="complete", nullable=False)
+    requires_manual_review = Column(Boolean, default=False, nullable=False)
+
     created_by = Column(String(36), ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

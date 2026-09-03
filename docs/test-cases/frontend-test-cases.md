@@ -734,3 +734,23 @@
 - 多个历史 Judgment 各自显示其结论时间，新分析不覆盖旧结论时间
 
 ---
+
+---
+
+## FE-37 数据不完整（degraded）提示与人工复核（issue #8）
+
+- **优先级**：P1
+- **来源**：GitHub issue #8 —— 前端展示数据质量、缺失分支、源错误摘要与人工复核提示
+
+**前置条件**
+- 某地址分析产生 `data_quality="degraded"`（部分上游分支失败）
+
+**操作步骤**
+1. 进入 /analyze/<judgment_id>，查看 VerdictCard
+2. 观察是否有「数据不完整 · 需人工复核」提示块
+
+**预期结果**
+- 提示块显示缺失分支数（missing_branches）与源错误摘要（error_code @ address，最多 5 条）
+- `data_quality="complete"`（完整数据）时无该提示块，其余展示不变
+
+---

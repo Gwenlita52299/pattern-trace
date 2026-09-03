@@ -529,3 +529,47 @@
 - [x] fixture 与 live provider 均实现 `resolve_spending_transaction`，返回语义一致
 - [x] builder 优先走领域接口；已花 UTXO 正确展开、未花计 unspent、数据源故障计 degraded
 - [ ] live 同步构建隔离到线程池后不阻塞 FastAPI 事件循环（暂缓，需不冲突的线程模型）
+
+---
+
+## GB-28 部分失败保留 + degraded 数据质量元数据（issue #8）
+
+- **优先级**：P1
+- **来源**：GitHub issue #8 —— 上游部分分支失败时不整体失败，保留已获取子图并标记 degraded
+
+**前置条件**
+- 种子地址拥有 ≥ 2 个根 UTXO
+- 一个根分支的 outspend/get_tx 抛错（超时/429/网络），另一分支正常
+
+**操作步骤**
+1. 用部分失败 provider 构建该地址子图（hops=1）
+2. 检查返回的 BFSStats 与 canonical subgraph stats
+
+**预期结果**
+- 存活分支仍被展开（子图不丢失）
+- `data_quality="degraded"`、`requires_manual_review=true`
+- `missing_branches ≥ 1`，`source_errors` 含 `{stage:"esplora", address, error_code, message}`
+- canonical subgraph `stats` 同样携带上述字段
+- 根地址完全不可用时仅剩种子节点且 degraded=true → orchestration 据此抛 `ESPLORA_UNAVAILABLE`
+
+---
+
+## GB-29 degraded 时 LLM Prompt 声明图不完整（issue #8）
+
+- **优先级**：P1
+- **来源**：GitHub issue #8 —— 数据质量 degraded 时 Prompt 说明限制、要求谨慎判断
+
+**前置条件**
+- 构建结果为 degraded（missing_branches ≥ 1）
+
+**操作步骤**
+1. 以 `degraded=True` 构造 LLM 消息（build_messages）
+2. 检查 user 侧内容
+
+**预期结果**
+- 注入 `DATA QUALITY: degraded (missing_branches=…)` 与提示：
+  "The transaction graph is INCOMPLETE because some upstream data requests failed.
+  Do not treat the observed graph as exhaustive…" 
+- 完整（非 degraded）数据下不含该提示；判断流程不变
+
+---
