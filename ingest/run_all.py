@@ -69,30 +69,33 @@ def main(argv: list[str] | None = None) -> int:
             session.commit()
             embeddings = compute_embeddings.run(session)
 
-            # 汇总校验（IG-01/05）：比例口径 = grade A 全体 vs negatives
+            # 汇总校验（IG-01/05）：positive 口径 = patterns 表全部行
+            # （confirmed + synthetic，issue #10 不再以 evidence_grade='A' 为口径）；
+            # 负样本仅存于 pattern_negatives，不入 patterns（IG-04）。
             from sqlalchemy import func
 
             from backend.models.knowledge import Pattern, PatternNegative
 
-            pos_a = (session.query(func.count(Pattern.id))
-                     .filter(Pattern.evidence_grade == "A").scalar() or 0)
+            pos_total = session.query(func.count(Pattern.id)).scalar() or 0
             pos_confirmed = (session.query(func.count(Pattern.id))
-                             .filter(Pattern.source == "lazarus_confirmed").scalar() or 0)
+                             .filter(Pattern.provenance == "confirmed").scalar() or 0)
+            pos_synth = (session.query(func.count(Pattern.id))
+                         .filter(Pattern.provenance == "synthetic").scalar() or 0)
             neg_total = session.query(func.count(PatternNegative.id)).scalar() or 0
             neg_in_patterns = (session.query(func.count(Pattern.id))
                                .filter(Pattern.source == "constructed_normal").scalar() or 0)
 
-    ratio = neg_total / pos_a if pos_a else 0.0
+    ratio = neg_total / pos_total if pos_total else 0.0
     print("\n===== run_all 汇总 =====")
     print(f"labels: {labels}")
-    print(f"positives: total_A={pos_a} (lazarus_confirmed={pos_confirmed}, "
-          f"synth={pos_a - pos_confirmed})")
+    print(f"positives: total={pos_total} "
+          f"(confirmed={pos_confirmed}, synthetic={pos_synth})")
     print(f"negatives: {neg_total}  ratio(neg:pos)={ratio:.2f}:1 "
           f"(目标 {settings.negative_ratio}:1)")
     print(f"embeddings: {embeddings}")
 
     problems = []
-    if pos_a == 0 or neg_total == 0:
+    if pos_total == 0 or neg_total == 0:
         problems.append("正或负样本为空（IG-01）")
     if neg_in_patterns != 0:
         problems.append("负样本泄漏进 patterns 业务召回库（IG-04）")

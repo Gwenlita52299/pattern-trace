@@ -23,6 +23,13 @@ class TestDeterminism:
 
 
 class TestStructuralConstraints:
+    def test_all_synth_rows_carry_synthetic_provenance_and_grade_s(self):
+        """issue #10：合成模板必须标明 provenance=synthetic，且不再伪装成 Grade A。"""
+        rows = generate(50)
+        assert all(r["source"] == "lazarus_synth" for r in rows)
+        assert all(r["provenance"] == "synthetic" for r in rows)
+        assert all(r["evidence_grade"] == "S" for r in rows)
+
     def test_all_pass_positive_filter_line(self):
         rows = generate(100)
         assert all(r["canonical_subgraph"]["stats"]["node_count"]

@@ -100,6 +100,11 @@ export default function VerdictCard({ onRetry }: VerdictCardProps) {
         <p className="mt-2 text-xs text-slate-600">
           命中模式：
           <span className="font-mono">{judgment.matched_pattern_name}</span>
+          {judgment.matched_pattern_name.startsWith('synth_') && (
+            <span className="ml-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+              合成模板 · 非真实链上证据
+            </span>
+          )}
         </p>
       )}
 

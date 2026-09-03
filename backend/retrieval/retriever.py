@@ -94,6 +94,10 @@ class PatternCandidate:
     semantic_similarity: float = 0.0
     wl_kernel_score: float = 0.0
     evidence_grade: str = "A"
+    # issue #10：来源性质与证据等级分离——合成模板(source=lazarus_synth,
+    # provenance=synthetic)只作结构检索参考，不会被解释为真实链上证据。
+    source: str = "lazarus_confirmed"
+    provenance: str = "confirmed"
     difference_note: str | None = None
 
 
@@ -212,7 +216,7 @@ class Retriever:
         可被外部注入的权重参数（RT-05）。
         """
         sql = text("""
-            SELECT id, name, description, canonical_subgraph, evidence_grade,
+            SELECT id, name, source, provenance, description, canonical_subgraph, evidence_grade,
                    1 - (structural_features <=> CAST(:sv AS vector)) AS struct_sim,
                    1 - (semantic_embedding  <=> CAST(:ev AS vector)) AS sem_sim,
                    :w_struct * (structural_features <=> CAST(:sv AS vector))
@@ -237,7 +241,7 @@ class Retriever:
                     exclude_ids: list[str], limit: int) -> list[dict]:
         """两路 ANN（各自 HNSW Top-N）+ RRF 融合 —— 规模化预留（RT-07 P2）。"""
         base = """
-            SELECT id, name, description, canonical_subgraph, evidence_grade
+            SELECT id, name, source, provenance, description, canonical_subgraph, evidence_grade
             FROM patterns
             WHERE embedding_model = :model AND id NOT IN :excluded
             ORDER BY {col} <=> CAST(:vec AS vector)
@@ -291,6 +295,8 @@ class Retriever:
                 semantic_similarity=round(row["sem_sim"], 6),
                 wl_kernel_score=round(wl, 6),
                 evidence_grade=row.get("evidence_grade") or "A",
+                source=row.get("source") or "lazarus_confirmed",
+                provenance=row.get("provenance") or "confirmed",
                 difference_note=generate_difference_note(query_canon, cand_canon),
             ))
         return RetrievalResult(candidates=candidates)

@@ -46,6 +46,27 @@ EDGE_COLS = {
 
 MIN_PATTERN_NODES = 5  # §2 过滤：节点数 ≥ 5
 
+# issue #10：source → provenance。合成样本只作检索参考，不代表真实链上交易；
+# 负样本仅用于阈值校准与误报评估。evidence_grade 与 provenance 分离：
+# confirmed 可用真实等级(A/B)，synthetic 用 S，negative 用 B。
+PROVENANCE_BY_SOURCE: dict[str, str] = {
+    "lazarus_confirmed": "confirmed",
+    "lazarus_synth": "synthetic",
+    "constructed_normal": "negative",
+}
+
+# source → 证据等级（issue #10：synthetic 不再伪装成 Grade A）
+GRADE_BY_SOURCE: dict[str, str] = {
+    "lazarus_confirmed": "A",
+    "lazarus_synth": "S",
+    "constructed_normal": "B",
+}
+
+
+def provenance_of(source: str) -> str:
+    """由 source 推导来源性质；未知 source 保守回退为 synthetic，避免误标为 confirmed。"""
+    return PROVENANCE_BY_SOURCE.get(source, "synthetic")
+
 
 class IngestError(Exception):
     """带文件/字段定位的输入错误（IG-16 要求清晰报错）。"""
@@ -403,13 +424,19 @@ def ingest_lock(engine):
 
 
 def new_pattern_row(*, name: str, source: str, grade: str, sub: Subgraph,
-                    canon: dict | None = None) -> dict:
-    """组装一行 pattern 记录（向量列由 compute_embeddings 二段填充）。"""
+                    canon: dict | None = None,
+                    provenance: str | None = None) -> dict:
+    """组装一行 pattern 记录（向量列由 compute_embeddings 二段填充）。
+
+    issue #10：provenance 由 source 派生（confirmed/synthetic/negative），
+    单独显式传入时以其为准。
+    """
     canon = canon or to_canonical(sub)
     return {
         "id": str(uuid.uuid4()),
         "name": name,
         "source": source,
+        "provenance": provenance or provenance_of(source),
         "evidence_grade": grade,
         "seed_address": sub.seed_address,
         "description": describe_subgraph(canon),

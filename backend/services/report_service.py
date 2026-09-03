@@ -67,6 +67,34 @@ def _fmt_time(v) -> str:
     return str(v)
 
 
+def knowledge_base_provenance_metrics(session) -> dict:
+    """知识库来源性质统计（issue #10 评估报告：真实/合成样本指标拆分）。
+
+    把 confirmed / synthetic / negative 三类样本独立计数，并计算合成模板在
+    正样本中的占比——用于评估报告明确区分「真实确认证据」与「合成检索参考」，
+    避免把合成 pattern 的指标混入真实确认样本口径。
+    """
+    from sqlalchemy import func
+
+    from ..models.knowledge import Pattern, PatternNegative
+
+    confirmed = (session.query(func.count(Pattern.id))
+                 .filter(Pattern.provenance == "confirmed").scalar() or 0)
+    synthetic = (session.query(func.count(Pattern.id))
+                 .filter(Pattern.provenance == "synthetic").scalar() or 0)
+    negative = (session.query(func.count(PatternNegative.id))
+                .filter(PatternNegative.provenance == "negative").scalar() or 0)
+    positives = confirmed + synthetic
+    return {
+        "confirmed": confirmed,
+        "synthetic": synthetic,
+        "negative": negative,
+        "total_positives": positives,
+        "synthetic_share": round(synthetic / positives, 4) if positives else 0.0,
+        "negative_to_positive_ratio": round(negative / positives, 4) if positives else 0.0,
+    }
+
+
 def collect_case_entries(session, case_id: str) -> list[dict]:
     """每个关联地址取 **冻结** 的 completed judgment 作为报告素材（issue #7）。
 

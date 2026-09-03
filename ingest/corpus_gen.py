@@ -4,9 +4,11 @@
 （3 个 seed）。本模块从已确认场景的拓扑特征（CoinJoin 入口 → 分层 peel /
 扇出 → 跨链桥逃逸）派生结构变体，补足检索阶段需要的知识库规模。
 
-诚实标注：生成 pattern 的 source='lazarus_synth'（非链上实证），grade 仍为 A
-（作为洗钱战术模板的定位与 confirmed 一致）；真实 golden 场景由
-load_lazarus_subgraphs.py 以 source='lazarus_confirmed' 入库，二者永不混淆。
+诚实标注：生成 pattern 的 source='lazarus_synth'、provenance='synthetic'——
+**不是链上实证**。issue #10 起 grade 用 'S'（synthetic template，区别于真实样本的
+A/B 语义），合成模板只作结构检索参考，不会被解释为真实确认证据；真实 golden
+场景由 load_lazarus_subgraphs.py 以 source='lazarus_confirmed'、
+provenance='confirmed'、grade='A' 入库，二者永不混淆。
 
 确定性：每个实例只依赖 (seed, index) —— 同参数重跑产出完全相同的内容，
 配合 (seed_address, content_hash) upsert 实现幂等（IG-10）。
@@ -196,7 +198,8 @@ def generate(count: int, seed_key: int = 42) -> list[dict]:
             sub.seed_address = _fake_addr(random.Random(f"rekey:{seed_key}:{i}:{len(seen_seeds)}"))
         seen_seeds.add(sub.seed_address)
         rows.append(new_pattern_row(
-            name=name, source="lazarus_synth", grade="A", sub=sub))
+            name=name, source="lazarus_synth", grade="S",
+            provenance="synthetic", sub=sub))
     return rows
 
 

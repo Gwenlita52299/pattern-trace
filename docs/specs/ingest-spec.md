@@ -9,6 +9,12 @@
 > 区分）；负样本为 salary/exchange/dormant 三模板合成（live 抓取为 P2）；
 > embedding 当前仅 SHA-256 stub（DB 元数据沿用占位模型名）。真实 Parquet 语料、
 > 公开浏览器负样本与真 embedding provider 接入前，检索指标按合成口径解读。
+>
+> **issue #10（provenance 分离）**：知识库每行带 `provenance`（confirmed | synthetic |
+> negative）区分「真实链上证据」与「合成结构模板」。合成样本 `provenance='synthetic'`，
+> `evidence_grade='S'`，只作检索参考、不伪装成真实 Grade A 证据；负样本
+> `provenance='negative'`。所有消费方（retrieval / LLM prompt / 前端 / 报告）据此
+> 把合成 pattern 与真实确认样本区分对待。
 
 ## 1. 目录结构
 
@@ -39,9 +45,27 @@ ingest/
 4. 计算结构特征向量（复用 retrieval/specs 中的特征定义）
 5. 生成语义描述文本 → 计算 embedding
 6. 计算 WL 子树核指纹
-7. 写入 patterns 表，evidence_grade = 'A'，source = 'lazarus_confirmed'
+7. 写入 patterns 表，evidence_grade = 'A'，source = 'lazarus_confirmed'，provenance = 'confirmed'
 
 预期产出：~数千条正样本 pattern。
+
+### 2a. 合成正样本（source=lazarus_synth，provenance=synthetic）
+
+背景：本地 golden fixture 仅 3 个 seed，不满足检索阶段「数千条」规模要求。
+`corpus_gen.py` 从已确认场景的拓扑特征（CoinJoin 入口 → 分层 peel / 扇出 → 跨链桥
+逃逸）派生结构变体，确定性合成正样本并写入 `patterns` 表。
+
+**用途与限制**：合成样本是**结构模板**，用于补足结构检索的召回规模与多形态覆盖；
+它们**不代表真实 Bitcoin 交易或真实案件证据**，仅作为检索参考，不得被解释为
+真实链上确认证据。为此（issue #10）：
+- `source = 'lazarus_synth'`，`provenance = 'synthetic'`；
+- `evidence_grade = 'S'`（synthetic template），**不再是**真实样本的 `'A'` 语义；
+- LLM 判断 prompt 会标记 `evidence_status: not_real_on_chain_evidence`，并要求模型
+  **不得把候选自身当作区块链证据引用**；
+- 前端知识库列表把此类 pattern 标注为「合成模板」，报告/评估指标将其与真实样本拆分统计。
+
+真实 golden 场景由 `load_lazarus_subgraphs.py` 以 `source='lazarus_confirmed'`、
+`provenance='confirmed'`、`evidence_grade='A'` 入库，二者永不混淆。
 
 ## 3. 负样本构造
 
@@ -49,7 +73,7 @@ ingest/
 - 条件：无混币器接触、无黑名单标签、交易频率正常
 - 按 3:1 负正比例构造同等规模子图
 - 使用相同的特征计算和 embedding 流程
-- evidence_grade = 'B', source = 'constructed_normal'
+- evidence_grade = 'B', source = 'constructed_normal', provenance = 'negative'
 
 ### 3a. 负样本隔离（重要）
 
