@@ -14,13 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from backend.core.btc_address import encode_bech32m_address, validate_btc_address
+from backend.core.btc_address import encode_bech32m_address, validate_btc_address  # noqa: E402
 
 
 def addr(name: str) -> str:
@@ -38,6 +39,33 @@ def tx(txid: str, vin_addr: str, vin_value: float,
         "outputs": [{"address": a, "value": v} for a, v in outs],
         "block_time": BLOCK_TIME,
         **({"unspent_outputs": [0]} if unspent else {}),
+    }
+
+
+def op_return_output(data: bytes) -> dict:
+    """构造带原始 OP_RETURN 脚本的输出（issue #4 运行时检测 fixture）。
+
+    仅支持直接 pushdata 与 OP_PUSHDATA1/2/4，脚本首字节为 OP_RETURN(0x6a)。
+    """
+    n = len(data)
+    if n < 0x4C:
+        pre = bytes([0x6A, n])
+        push = f"OP_PUSHDATA1 {n}"
+    elif n <= 0xFF:
+        pre = bytes([0x6A, 0x4C, n])
+        push = f"OP_PUSHDATA1 {n}"
+    elif n <= 0xFFFF:
+        pre = bytes([0x6A, 0x4D]) + struct.pack("<H", n)
+        push = f"OP_PUSHDATA2 {n}"
+    else:
+        pre = bytes([0x6A, 0x4E]) + struct.pack("<I", n)
+        push = f"OP_PUSHDATA4 {n}"
+    return {
+        "address": None,
+        "value": 0,
+        "scriptpubkey": (pre + data).hex(),
+        "scriptpubkey_asm": f"OP_RETURN {push}",
+        "scriptpubkey_type": "op_return",
     }
 
 
@@ -62,8 +90,14 @@ def build_high(A: dict) -> tuple[list[dict], list[dict], list]:
                [(A["peel2a"], 0.25), (A["peel2b"], 0.72)]),
         ],
         A["peel2a"]: [
-            # 跨链逃逸：命中 crosschain 集 → 协议边终止展开
-            tx(xb_txid, A["peel2a"], 0.24, [("bc1qxbridgeburn", 0.23)]),
+            # 跨链逃逸：运行时 OP_RETURN 检测命中 THORChain → 协议边终止展开
+            {
+                "txid": xb_txid,
+                "inputs": [{"address": A["peel2a"], "value": 0.24}],
+                "outputs": [op_return_output(b"SWAP:THOR.RUNE/ETH:0xdead:12"),
+                            {"address": "bc1qxbridgeburn", "value": 0.23}],
+                "block_time": BLOCK_TIME,
+            },
         ],
         A["peel2b"]: [
             tx("demo" + "4" * 60, A["peel2b"], 0.70,
@@ -81,7 +115,7 @@ def build_high(A: dict) -> tuple[list[dict], list[dict], list]:
         ],
     }
     return ([cj_txid],
-            [{"txid": xb_txid, "protocol": "thorchain_swap"}],
+            [{"txid": xb_txid, "protocol": "thorchain"}],
             txs)
 
 
@@ -108,6 +142,56 @@ def build_low_and_normal(A: dict) -> dict:
     }
 
 
+def build_op_return_scenarios(A: dict) -> dict:
+    """issue #4：带原始 OP_RETURN 脚本的检测场景交易样本（供 detection 单测直接加载）。
+
+    独立于 txs_by_address（不参与演示子图构建），覆盖已支持协议 / unknown / malformed /
+    多个 OP_RETURN / CoinJoin+Crosschain 同时命中；不依赖 CSV。
+    """
+    dest_a = A["peel2b"]
+    dest_b = A["low_b"]
+
+    def t(txid: str, inputs: list, outputs: list) -> dict:
+        return {"txid": txid, "inputs": inputs, "outputs": outputs,
+                "block_time": BLOCK_TIME}
+
+    # 多个等额输入/输出（结构 CoinJoin 形状）→ 与 OP_RETURN 同时命中
+    cj_inputs = [{"address": addr(f"cj_in_{j}"), "value": 0.1} for j in range(12)]
+    cj_outputs = [{"address": addr(f"cj_out_{j}"), "value": 0.1} for j in range(12)]
+    cj_outputs.append(op_return_output(b"SWAP:THOR.RUNE/ETH:0xdead:12"))
+
+    return {
+        "supported_thorchain": t(
+            "demo" + "e" * 60,
+            [{"address": A["peel1"], "value": 0.1}],
+            [op_return_output(b"SWAP:THOR.RUNE/ETH:0xdead:12"),
+             {"address": dest_a, "value": 0.09}],
+        ),
+        "unknown_op_return": t(
+            "demo" + "f" * 60,
+            [{"address": A["peel1"], "value": 0.1}],
+            [op_return_output(b"HELLO UNKNOWN PROTOCOL"),
+             {"address": dest_b, "value": 0.09}],
+        ),
+        "malformed_op_return": t(
+            "demo" + "a1" * 30,
+            [{"address": A["peel1"], "value": 0.1}],
+            [{"address": None, "value": 0, "scriptpubkey": "6a",
+              "scriptpubkey_asm": "OP_RETURN", "scriptpubkey_type": "op_return"},
+             {"address": dest_a, "value": 0.09}],
+        ),
+        "multiple_op_return": t(
+            "demo" + "b1" * 30,
+            [{"address": A["peel1"], "value": 0.1}],
+            [op_return_output(b"NOT A PROTOCOL"),
+             op_return_output(b":SWAP:THOR.RUNE"),
+             {"address": dest_a, "value": 0.09}],
+        ),
+        "coinjoin_plus_crosschain": t(
+            "demo" + "c1" * 30, cj_inputs, cj_outputs),
+    }
+
+
 def main() -> int:
     names = {
         # high 拓扑
@@ -124,16 +208,24 @@ def main() -> int:
     A = {k: addr(v) for k, v in names.items()}
 
     cj_ids, xc_entries, high_txs = build_high(A)
+    scenarios = build_op_return_scenarios(A)
     data = {
         # 顺序即种子案例顺序：high / low / no_match 目标地址
         "seed_addresses": [A["seed"], A["low_seed"], A["normal_seed"]],
         "coinjoin_txids": cj_ids,
         "crosschain_tx_set": {e["txid"]: e["protocol"] for e in xc_entries},
         "txs_by_address": {**high_txs, **build_low_and_normal(A)},
+        "op_return_scenarios": scenarios,
     }
 
     bad = [a for a in (*data["seed_addresses"], *A.values())
            if validate_btc_address(a)]
+    # 校验检测场景样本中非 OP_RETURN 输出地址
+    for sc in scenarios.values():
+        for out_ in sc["outputs"]:
+            a = out_.get("address")
+            if a and validate_btc_address(a):
+                bad.append(a)
     if bad:
         raise SystemExit(f"generated invalid addresses: {bad}")
 
