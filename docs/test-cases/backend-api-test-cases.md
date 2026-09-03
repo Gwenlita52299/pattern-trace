@@ -925,3 +925,29 @@
 **预期结果**
 - 过期后访问返回 403 或 410（URL 失效）
 - case closed 后 URL 仍可访问（closed 仅限制编辑不限制查看），或按 spec 定义的吊销策略返回对应错误码
+
+---
+
+## BE-51 Judgment 结论时间戳与不可变案件报告快照（issue #7）
+
+- **优先级**：P1
+- **来源**：GitHub issue #7 —— history Judgment 时间版本化 + 报告冻结快照
+
+**前置条件**
+- 已分析过某地址（completed），并通过 `GET /api/v1/judgments/:id` 获取结论
+
+**操作步骤**
+1. 对同一地址发起 2 次分析（不同 hops），各轮询至终态
+2. 检查两次分析返回的 `concluded_at` / `data_as_of`
+3. 再查第一次的 judgment，确认其结论内容与时间未被第二次分析覆盖
+4. 创建案件并关联该地址，分析完成后查 `case_addresses.judgment_id`
+5. 对该案件生成报告，记录报告内容；随后重新分析该地址，再次读取已生成报告
+
+**预期结果**
+- 每次分析产生独立 judgment 行，completed/failed 均写入 `concluded_at`；completed 还写入 `data_as_of`（链上数据时间点）
+- 旧 judgment 的结论时间/内容在新分析后保持不变（时间版本化，不覆盖）
+- 新分析完成后，关联案件的 `case_addresses.judgment_id` 回指该地址的最新 completed judgment
+- 已生成报告（文件）在重新分析后内容不变（引用首次 judgment / subgraph_hash），下载与重生成不再重查地址全局最新 Judgment
+- 报告证据链包含 `judgment_id / subgraph_hash / model / prompt_version / builder_version / risk_level / confidence / evidence / reasoning / recommended_action / concluded_at / data_as_of`
+
+---

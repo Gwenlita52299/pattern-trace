@@ -776,7 +776,11 @@ def create_app() -> FastAPI:
                         "risk_level": latest.risk_level,
                         "confidence": latest.confidence,
                         "created_at": latest.created_at.isoformat()
-                        if latest.created_at else None}
+                        if latest.created_at else None,
+                        "concluded_at": latest.concluded_at.isoformat()
+                        if latest.concluded_at else None,
+                        "data_as_of": latest.data_as_of.isoformat()
+                        if latest.data_as_of else None}
                         if latest else None),
                 })
         return payload
@@ -1078,6 +1082,9 @@ def _judgment_payload(row) -> dict:
         "time_window_days": row.time_window_days,
         "status": row.status,
         "created_at": row.created_at.isoformat() if row.created_at else None,
+        "concluded_at": row.concluded_at.isoformat()
+        if row.concluded_at else None,
+        "data_as_of": row.data_as_of.isoformat() if row.data_as_of else None,
         "poll_url": f"/api/v1/judgments/{row.id}",
     }
     if row.status == "completed":

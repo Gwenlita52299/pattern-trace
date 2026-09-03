@@ -34,7 +34,12 @@ from ..llm_judge.judge import (
     canonical_subgraph_hash,
 )
 from ..llm_judge.providers import get_llm_client
-from ..models.base import TERMINAL_STATUSES, Judgment, JudgmentEvent
+from ..models.base import (
+    TERMINAL_STATUSES,
+    CaseAddress,
+    Judgment,
+    JudgmentEvent,
+)
 from ..models.knowledge import CoinjoinTxid
 from ..retrieval.retriever import Retriever, subgraphresult_to_canonical
 
@@ -176,6 +181,12 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     # processing，故回退为同步构建（fixture 构建 ~0.4ms，可忽略阻塞）。live 隔离另议。
     seed_time = provider.seed_block_time(row.address) \
         if hasattr(provider, "seed_block_time") else None
+    # issue #7 data_as_of：本次分析使用的链上数据时间点（种子/发起区块时间）；
+    # 无法取得统一链上时间时，记录本次查询时间（now UTC）。
+    data_as_of = (
+        datetime.fromtimestamp(seed_time, UTC) if seed_time is not None
+        else datetime.now(UTC)
+    )
     subgraph = builder.build(row.address, provider, hops=row.hops,
                              time_window_days=row.time_window_days,
                              seed_block_time=seed_time)
@@ -232,11 +243,26 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             builder_version=BUILDER_VERSION,
             latency_ms=latency_ms,
             thinking=judge.last_thinking or None,
+            concluded_at=datetime.now(UTC),
+            data_as_of=data_as_of,
         ))
     if result.rowcount == 0:  # 终态守卫：并发方已终结该任务
         session.rollback()
         return "skipped"
     _record_event(session, row.id, "processing", "completed")
+    # issue #7：CaseAddress.judgment_id 的明确写入/更新逻辑——完成一个 judgment 后，
+    # 把该地址在所有案件中的关联行指向其「最新 completed」judgment（时间版本化指针）。
+    latest_id = session.execute(
+        select(Judgment.id)
+        .where(Judgment.address == row.address,
+               Judgment.status == "completed")
+        .order_by(Judgment.created_at.desc(), Judgment.id.desc())
+        .limit(1)).scalar_one_or_none()
+    if latest_id:
+        session.execute(
+            update(CaseAddress)
+            .where(CaseAddress.address == row.address)
+            .values(judgment_id=latest_id))
     session.commit()
     return "completed"
 
@@ -248,6 +274,7 @@ def _mark_failed(session, judgment_id: str, error_code: str,
         "error_code": error_code,
         "error_message": error_message[:2000],
         "failed_at": datetime.now(UTC),
+        "concluded_at": datetime.now(UTC),
     }
     if retry_count is not None:
         values["retry_count"] = retry_count

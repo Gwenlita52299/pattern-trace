@@ -56,6 +56,8 @@ export interface JudgmentPayload {
   retry_count?: number;
   subgraph?: { nodes: GraphNode[]; edges: GraphEdge[] };
   latency_ms?: number | null;
+  concluded_at?: string | null;
+  data_as_of?: string | null;
 }
 
 const START_INTERVAL_MS = 2_000;

@@ -19,6 +19,7 @@ interface CaseDetail {
       id: string;
       risk_level: string | null;
       confidence: number | null;
+      concluded_at: string | null;
     } | null;
   }[];
 }
@@ -154,6 +155,11 @@ export default function CaseDetailPage() {
                 >
                   查看分析 →
                 </a>
+                {a.latest_judgment?.concluded_at && (
+                  <span className="text-[10px] text-slate-400">
+                    结论于 {new Date(a.latest_judgment.concluded_at).toLocaleString('zh-CN')}
+                  </span>
+                )}
                 {!a.latest_judgment && (
                   <button
                     onClick={() => {

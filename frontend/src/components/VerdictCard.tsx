@@ -21,6 +21,15 @@ const ACTION_LABELS: Record<string, string> = {
   none: "none 无需操作",
 };
 
+/** ISO 时间 → `YYYY-MM-DD HH:MM UTC`；空值显示 '-'。 */
+function fmtTs(ts?: string | null): string {
+  if (!ts) return "-";
+  const d = new Date(ts);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+    `${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
+}
+
 export interface VerdictCardProps {
   onRetry?: () => void; // failed 态重试（重新发起 analyze）
 }
@@ -146,6 +155,18 @@ export default function VerdictCard({ onRetry }: VerdictCardProps) {
           {judgment.latency_ms} ms · model {judgment.id.slice(0, 8)}
         </p>
       )}
+
+      {/* issue #7：结论/数据时间（历史 Judgment 时间版本化） */}
+      <dl className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-200/60 pt-2 text-[10px] text-slate-500">
+        <div>
+          <dt className="uppercase tracking-wide text-slate-400">concluded</dt>
+          <dd className="font-mono">{fmtTs(judgment?.concluded_at)}</dd>
+        </div>
+        <div>
+          <dt className="uppercase tracking-wide text-slate-400">data as of</dt>
+          <dd className="font-mono">{fmtTs(judgment?.data_as_of)}</dd>
+        </div>
+      </dl>
     </div>
   );
 }
