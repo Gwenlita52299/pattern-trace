@@ -99,10 +99,11 @@
 ## GB-06 early_stop crosschain 带协议标签
 
 - **优先级**：P0
-- **来源**：§3 + §4 crosschain_tx_set 映射
+- **来源**：§3 + §4 运行时 CrosschainDetector（issue #5 移除 crosschain_tx_set 标签映射）
 
 **前置条件**
-- crosschain_tx_set={"bridge_tx": "thorchain"}
+- crosschain_tx_set 标签库已移除：不再预置 txid→protocol 映射
+- Mock 消费交易带 OP_RETURN 脚本（如 `SWAP:THOR.RUNE/ETH:0xdead:12`），由运行时 Detector 命中
 - Mock 返回 bridge_tx
 
 **操作步骤**
@@ -112,6 +113,7 @@
 - 对应边 `is_crosschain=True`
 - 边上携带 `op_return_protocol="thorchain"`
 - `terminated_early_stop >= 1`
+- 判定只依赖 Detector；无 OP_RETURN / 无协议匹配的交易不再因 txid 命中旧标签集被判为跨链
 
 ---
 

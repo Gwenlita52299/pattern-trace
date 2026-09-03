@@ -33,6 +33,22 @@ def out(addr: str, value: float = V) -> dict:
     return {"address": addr, "value": value}
 
 
+# 跨链判定由运行时 CrosschainDetector 承担（issue #5 移除 crosschain_tx_set 兜底），
+# 测试用例用带原始 OP_RETURN 脚本的输出构造跨链消费交易，使 Detector 在运行时命中。
+def op_return_out(data: bytes) -> dict:
+    script = bytes([0x6A, len(data)]) + data
+    return {
+        "address": None,
+        "value": 0,
+        "scriptpubkey": script.hex(),
+        "scriptpubkey_asm": f"OP_RETURN OP_PUSHDATA1 {len(data)}",
+        "scriptpubkey_type": "op_return",
+    }
+
+
+CROSSCHAIN_MEMO = b"SWAP:THOR.RUNE/ETH:0xdead:12"
+
+
 def vin(addr: str, value: float, prev_txid: str, prev_vout: int = 0) -> dict:
     """一个 input 消费 (prev_txid, prev_vout) 这个由 addr 拥有的 UTXO。"""
     return {"address": addr, "value": value,
@@ -442,10 +458,11 @@ class TestTerminationConditions:
         assert all(e.is_remixer for e in stopped)
 
     def test_gb06_crosschain_early_stop_with_protocol(self):
-        builder = GraphBuilder(crosschain_tx_set={"bridge_tx": "thorchain"})
+        # issue #5：跨链判定只来自运行时 CrosschainDetector（无 crosschain_tx_set 兜底）。
         spender = MockTx(
-            txid="bridge_tx", inputs=[vin(SEED, 0.5, "u1")], outputs=[out("bc1qbr")])
-        result = builder.build(SEED, make_provider({SEED: [spender]}), hops=1)
+            txid="bridge_tx", inputs=[vin(SEED, 0.5, "u1")],
+            outputs=[op_return_out(CROSSCHAIN_MEMO), {"address": "bc1qbr", "value": 0.2}])
+        result = GraphBuilder().build(SEED, make_provider({SEED: [spender]}), hops=1)
         cross = [e for e in result.edges if e.is_crosschain]
         assert len(cross) == 1
         assert cross[0].op_return_protocol == "thorchain"
@@ -626,25 +643,29 @@ class TestBaselineAlignment:
     """在封闭 UTXO 图上验证基线决策级联（逐单元计数）与词表对齐。
 
     拓扑（每个 seed 拥有一个待消费 UTXO，UTXO 恰好计入一个主状态）：
-      - S1 的 UTXO 被 crosschain 交易消费 → early_stop_crosschain
-      - S2 的 UTXO 被 expanded 交易消费，其两个输出各被 crosschain 消费
+      - S1 的 UTXO 被跨链交易消费（OP_RETURN 运行时命中）→ early_stop_crosschain
+      - S2 的 UTXO 被 expanded 交易消费，其两个输出各被跨链交易消费
         → early_stop_crosschain ×2 与 expanded ×1（并附带两个跨链子分支）
       - S3 的 UTXO 未被任何交易消费 → unspent
       - S4 的 UTXO 被一笔远早于窗口的交易消费 → out_of_range
     合计 => unspent=1, out_of_range=1, crosschain=3, expanded=1。
+    跨链判定全部来自运行时 CrosschainDetector（无 crosschain_tx_set）。
     """
-    CROSSCHAIN = {"x_a": "thorchain", "x_b": "runes", "x_c": "mayachain"}
 
     def _graph(self) -> dict:
+        xc_outputs = lambda: [op_return_out(CROSSCHAIN_MEMO)]
         return {
-            "bc1qs1": [MockTx(txid="x_a", inputs=[vin("bc1qs1", 0.5, "u_s1")])],
+            "bc1qs1": [MockTx(txid="x_a", inputs=[vin("bc1qs1", 0.5, "u_s1")],
+                              outputs=xc_outputs())],
             "bc1qs2": [
                 MockTx(txid="exp", inputs=[vin("bc1qs2", 1.0, "u_s2")],
                        outputs=[out("bc1qb", 0.6), out("bc1qc", 0.3)],
                        block_time=1700000000.0),
             ],
-            "bc1qb": [MockTx(txid="x_b", inputs=[vin("bc1qb", 0.6, "exp", 0)])],
-            "bc1qc": [MockTx(txid="x_c", inputs=[vin("bc1qc", 0.3, "exp", 1)])],
+            "bc1qb": [MockTx(txid="x_b", inputs=[vin("bc1qb", 0.6, "exp", 0)],
+                             outputs=xc_outputs())],
+            "bc1qc": [MockTx(txid="x_c", inputs=[vin("bc1qc", 0.3, "exp", 1)],
+                             outputs=xc_outputs())],
             "bc1qs3": [MockTx(txid="fund3", outputs=[out("bc1qs3", 0.4)])],
             "bc1qs4": [
                 MockTx(txid="old_tx", inputs=[vin("bc1qs4", 0.5, "u_s4")],
@@ -653,7 +674,7 @@ class TestBaselineAlignment:
         }
 
     def test_closed_graph_termination_stats_match_cascade(self):
-        builder = GraphBuilder(crosschain_tx_set=self.CROSSCHAIN)
+        builder = GraphBuilder()
         results = [builder.build(addr, make_provider(self._graph()), hops=3,
                                  time_window_days=90, seed_block_time=1700000000.0)
                    for addr in ("bc1qs1", "bc1qs2", "bc1qs3", "bc1qs4")]
@@ -683,11 +704,15 @@ class TestBaselineAlignment:
         }
 
     def test_unspent_vs_out_of_range_cascade_order(self):
-        """级联顺序：unspent 先于 out_of_range 先于 early_stop（基线 Phase1→2）。"""
+        """级联顺序：unspent 先于 out_of_range 先于 early_stop（基线 Phase1→2）。
+
+        跨链消费交易（OP_RETURN 运行时命中）但时间早于窗口 → 仍判 out_of_range，
+        验证时间窗判定优先于跨链判定（无 crosschain_tx_set 兜底）。
+        """
         spender = MockTx(txid="both", inputs=[vin(SEED, 0.5, "u1")],
-                         outputs=[out("bc1qz")],
+                         outputs=[op_return_out(CROSSCHAIN_MEMO)],
                          block_time=1000.0)
-        result = GraphBuilder(crosschain_tx_set={"both": "thorchain"}).build(
+        result = GraphBuilder().build(
             SEED, make_provider({SEED: [spender]}), hops=1,
             time_window_days=90, seed_block_time=1700000000.0,
         )

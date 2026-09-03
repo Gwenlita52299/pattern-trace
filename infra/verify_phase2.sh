@@ -111,16 +111,15 @@ PY
 )
 [ "$bad_neg" = "0" ] && ok "抽样 100 条负样本零混币器/跨链接触" || bad "违规 $bad_neg 条"
 
-echo "== IG-07 · 三张标签表 + 内存加载 =="
+echo "== IG-07 · 标签表 + 内存加载 =="
 cj_n=$(pg "SELECT count(*) FROM coinjoin_txids")
-cc_n=$(pg "SELECT count(*) FROM crosschain_tx_set")
 am_n=$(pg "SELECT count(*) FROM addresses_meta")
-proto_kinds=$(pg "SELECT count(DISTINCT protocol) FROM crosschain_tx_set")
-thor=$(pg "SELECT count(DISTINCT protocol) FROM crosschain_tx_set WHERE protocol LIKE 'thorchain%'")
-echo "    coinjoin_txids=${cj_n:-0} crosschain=${cc_n:-0} (${proto_kinds:-0} 种协议, thorchain ${thor:-0} 种) addresses_meta=${am_n:-0}"
-[ "${cj_n:-0}" -gt 0 ] && [ "${cc_n:-0}" -gt 0 ] && [ "${am_n:-0}" -gt 0 ] \
-  && ok "三张标签表均有数据" \
-  || bad "标签表缺失 cj=$cj_n cc=$cc_n am=$am_n"
+echo "    coinjoin_txids=${cj_n:-0} addresses_meta=${am_n:-0}"
+# 跨链判定不再来自标签表（crosschain_tx_set 已移除，见 issue #5）：
+# graph-builder 的跨链 early-stop 只依赖运行时 CrosschainDetector。
+[ "${cj_n:-0}" -gt 0 ] && [ "${am_n:-0}" -gt 0 ] \
+  && ok "coinjoin_txids / addresses_meta 均有数据" \
+  || bad "标签表缺失 cj=$cj_n am=$am_n"
 memload=$(.venv/bin/python - <<'PY'
 import os
 os.environ.setdefault("JWT_SECRET", "migration-placeholder")
@@ -128,8 +127,8 @@ from sqlalchemy.orm import Session
 from ingest.common import get_engine
 from ingest.load_labels import load_into_memory
 with Session(get_engine()) as s:
-    mixer, cj, cc = load_into_memory(s)
-print("ok" if len(mixer) > 0 and len(cj) > 0 and len(cc) > 0 else "empty")
+    mixer, cj = load_into_memory(s)
+print("ok" if len(mixer) > 0 and len(cj) > 0 else "empty")
 PY
 )
 [ "$memload" = "ok" ] && ok "graph-builder 可加载为内存 set/dict" || bad "内存加载失败($memload)"

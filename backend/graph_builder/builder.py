@@ -139,7 +139,6 @@ class GraphBuilder:
     def __init__(
         self,
         coinjoin_txids: set[str] | None = None,
-        crosschain_tx_set: dict[str, str] | None = None,
         max_nodes_per_layer: int = 50,
         max_total_nodes: int = 200,
         fanout_truncate_threshold: int = 20,
@@ -149,12 +148,11 @@ class GraphBuilder:
         crosschain_detector: CrosschainDetector | None = None,
     ) -> None:
         self.coinjoin_txids = coinjoin_txids or set()
-        self.crosschain_tx_set = crosschain_tx_set or {}
         # 结构级启发式判定：任一消费交易不在 coinjoin_txids 集合里时，
         # 直接按交易结构规则判别是否 CoinJoin（无 CSV / ML 依赖）。
         self.coinjoin_detector = coinjoin_detector or CoinJoinDetector()
-        # 运行时跨链检测（issue #4）：GraphBuilder 依赖稳定的 Detector 接口，
-        # 不再新增协议 if/else。crosschain_tx_set 作为标签库兜底保留。
+        # 运行时跨链检测（issue #4/#5）：GraphBuilder 只依赖稳定的 Detector 接口，
+        # 判定完全来自 Esplora 交易字段，不再依赖 crosschain_tx_set / CSV 标签库。
         self.crosschain_detector = crosschain_detector or CrosschainDetector()
         self.max_nodes_per_layer = max_nodes_per_layer
         self.max_total_nodes = max_total_nodes
@@ -527,13 +525,10 @@ class GraphBuilder:
               or self.coinjoin_detector.is_coinjoin(spending_tx)):
             outcome = "early_stop_wasabi"
         elif (xdet := self.crosschain_detector.detect(spending_tx)).is_crosschain:
-            # issue #4：运行时 OP_RETURN / pegout 检测确认跨链，不新增协议 if/else
+            # issue #4/#5：运行时 OP_RETURN / pegout 检测确认跨链，主判定仅此来源，
+            # 不新增协议 if/else，也不再回退到 crosschain_tx_set / CSV 标签库。
             outcome = "early_stop_crosschain"
             protocol = xdet.protocol
-        elif spending_tx.txid in self.crosschain_tx_set:
-            # 标签库兜底（DB/fixture 预生成 txid→protocol 映射）
-            outcome = "early_stop_crosschain"
-            protocol = self.crosschain_tx_set[spending_tx.txid]
         else:
             outcome = "expanded"
 

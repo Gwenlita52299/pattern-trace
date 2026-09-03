@@ -50,7 +50,8 @@ Detection(type, is_crosschain, protocol, reason, evidence, parser_version,
 
 命中后保持现有行为：`is_stopped_expansion=true`、`is_crosschain=true`、写入
 `op_return_protocol`，不继续展开该交易输出，并保留 reason/evidence/version。
-`crosschain_tx_set`（DB/夹具标签表）仅作为兜底保留，主判定由 Detector 承担。
+`crosschain_tx_set`（DB/夹具标签表）与 CSV 标签链路在 issue #5 已移除；跨链判定
+**只**由 Detector 承担（唯一主判定来源）。
 
 ## 6. Esplora / Fixture
 
@@ -58,3 +59,7 @@ Detection(type, is_crosschain, protocol, reason, evidence, parser_version,
   `scriptpubkey_address` / `value` 与可选 `pegout`。
 - fixture 提供带原始 OP_RETURN 脚本的交易样本，覆盖已支持协议、unknown、malformed、
   多 OP_RETURN 与 CoinJoin/crosschain 同时命中；不依赖 CSV 即可运行。
+- 这些样本（`infra/fixtures/demo_txs.json::op_return_scenarios`）即历史 CSV 迁移后的
+  离线回归样本：把交易的原始 OP_RETURN 脚本、payload 与预期 protocol 写入 fixture，
+  由运行时 decoder 重新识别。**若需保留原始 CSV 数据，只能放进离线评估 artifact，
+  生产代码（load_labels / GraphBuilder / data_source）不得读取。**

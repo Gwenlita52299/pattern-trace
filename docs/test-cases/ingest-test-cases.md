@@ -114,23 +114,25 @@
 
 ---
 
-## IG-07 标签加载三张集合入库
+## IG-07 标签集合入库
 
 - **优先级**：P0
 - **来源**：§4 标签表加载
 
 **前置条件**
-- 混币器地址 CSV / CoinJoin txids JSON / crosschain 映射 JSON 就绪
+- 混币器地址清单 + CoinJoin txids JSON 就绪
+- 跨链判定不再预备 crosschain_tx_set（issue #5 已移除）；不需要 op_returns CSV
 
 **操作步骤**
 1. `python ingest/load_labels.py`
-2. 分别查询三张标签表
+2. 分别查询标签表
 
 **预期结果**
 - addresses_meta.labels 包含混币器标记
 - coinjoin_txids 表有 Wasabi/JoinMarket 条目
-- crosschain_tx_set 有 thorchain 等协议映射
+- 不再创建查询 crosschain_tx_set 表（链路已删除）
 - graph-builder 启动时可成功加载到内存 set/dict
+- 跨链终止由运行时 CrosschainDetector 按交易字段判别
 
 ---
 

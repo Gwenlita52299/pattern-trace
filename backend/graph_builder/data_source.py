@@ -2,7 +2,8 @@
 
 双模式：
 - fixture：确定性演示数据（infra/fixtures/demo_txs.json），端到端测试与
-  离线演示不依赖公网 Esplora；含夹具自带的 coinjoin/crosschain 标记集，
+  离线演示不依赖公网 Esplora；含夹具自带的 coinjoin 标记集，而跨链终止语义
+  由运行时 CrosschainDetector 在真实交易脚本字段上判别（无 CSV / 标签库），
   使演示子图呈现与真实 Lazarus 场景一致的 mixer/crosschain 终止语义。
 - live：同步 httpx 访问 Esplora API（mempool.space 兼容），带重试退避/熔断/
   备用端点/Redis 缓存容错层（与 esplora.EsploraClient 共享熔断器与缓存键规范）。
@@ -23,6 +24,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .esplora import CircuitBreaker, CircuitOpenError
+from ..detection.crosschain import CrosschainDetector
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "infra" / "fixtures" / "demo_txs.json"
 
@@ -65,9 +67,10 @@ class FixtureTxProvider:
         self.txs_by_address: dict[str, list] = data["txs_by_address"]
         self.seed_addresses: list[str] = data.get("seed_addresses", [])
         self.coinjoin_txids: set[str] = set(data.get("coinjoin_txids", []))
-        self.crosschain_tx_set: dict[str, str] = dict(data.get("crosschain_tx_set", {}))
-        # issue #4：带原始 OP_RETURN 脚本的检测场景样本（供 detection 单测加载）
+        # issue #4/#5：跨链判定由运行时 CrosschainDetector 承担，不再预置
+        # crosschain_tx_set 标签映射（CSV / DB 标签链路已移除）。
         self.op_return_scenarios: dict[str, dict] = data.get("op_return_scenarios", {})
+        self._crosschain_detector = CrosschainDetector()
         self._input_prevouts: dict[str, list[tuple[str, int]]] = {}
         self._tx_by_txid: dict[str, dict] = {}
         # outspend 权威索引：(prev_txid, prev_vout) -> 消费它的交易 txid。
@@ -95,9 +98,10 @@ class FixtureTxProvider:
         # 只有会被展开的消费交易（非 coinjoin / 非 crosschain）的输出才会被 builder
         # 作为下一层 UTXO 入队；被 early_stop 截断的交易不会产生向下展开的子 UTXO。
         # 账本必须与 builder 的展开语义一致，否则 `(utxo, owner)` 无法匹配到消费交易。
+        # 跨链判定与 builder 一致：运行时 CrosschainDetector（无 crosschain_tx_set 标签库）。
         def is_stopped(tx: dict) -> bool:
             return (tx["txid"] in self.coinjoin_txids
-                    or tx["txid"] in self.crosschain_tx_set)
+                    or self._crosschain_detector.is_crosschain(tx))
 
         received: dict[str, deque[tuple[str, int]]] = defaultdict(deque)
         for _addr, txs in self.txs_by_address.items():

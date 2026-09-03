@@ -69,8 +69,12 @@ def op_return_output(data: bytes) -> dict:
     }
 
 
-def build_high(A: dict) -> tuple[list[dict], list[dict], list]:
-    """高风险拓扑；返回 (coinjoin_txids, crosschain 条目, txs_by_address 增量)。"""
+def build_high(A: dict) -> tuple[list[dict], list[dict]]:
+    """高风险拓扑；返回 (coinjoin_txids, txs_by_address 增量)。
+
+    跨链逃逸交易用运行时 OP_RETURN 脚本表达（issue #4/#5），不预置 txid→protocol
+    标签映射——跨链判定全部来自 CrosschainDetector。
+    """
     cj_txid = "demo" + ("0" * 56) + "coinjoin"
     xb_txid = "demo" + ("1" * 56) + "xbridge"
     fund_txid = "demo" + ("7" * 60)
@@ -114,9 +118,7 @@ def build_high(A: dict) -> tuple[list[dict], list[dict], list]:
                [(A[f"fan{i}"], 0.09) for i in range(8)]),
         ],
     }
-    return ([cj_txid],
-            [{"txid": xb_txid, "protocol": "thorchain"}],
-            txs)
+    return ([cj_txid], txs)
 
 
 def build_low_and_normal(A: dict) -> dict:
@@ -207,13 +209,12 @@ def main() -> int:
     }
     A = {k: addr(v) for k, v in names.items()}
 
-    cj_ids, xc_entries, high_txs = build_high(A)
+    cj_ids, high_txs = build_high(A)
     scenarios = build_op_return_scenarios(A)
     data = {
         # 顺序即种子案例顺序：high / low / no_match 目标地址
         "seed_addresses": [A["seed"], A["low_seed"], A["normal_seed"]],
         "coinjoin_txids": cj_ids,
-        "crosschain_tx_set": {e["txid"]: e["protocol"] for e in xc_entries},
         "txs_by_address": {**high_txs, **build_low_and_normal(A)},
         "op_return_scenarios": scenarios,
     }

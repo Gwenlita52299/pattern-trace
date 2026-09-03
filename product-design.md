@@ -125,10 +125,10 @@ flowchart LR
 原实现**不是**"遇到混币器地址就停止"，而是交易级判定：
 
 - spending tx 属于 `coinjoin_txids` 集合 → 生成 `is_stopped_expansion=true` 的边，不再向该交易内部展开；
-- spending tx 属于跨链 `crosschain_tx_set`（OP_RETURN 桥协议）→ 同样 early-stop，并记录 `op_return_protocol`；
-- 前置阶段需要构建：CoinJoin/混币交易集合、跨链 OP_RETURN 集合、txid → protocol 映射。
+- spending tx 被运行时 `CrosschainDetector` 判定为跨链（OP_RETURN / pegout 协议）→ 同样 early-stop，并记录 `op_return_protocol`；判定完全来自 Esplora 交易字段，无 crosschain_tx_set / CSV 标签库（issue #5）；
+- 前置阶段需要构建：CoinJoin/混币交易集合（跨链集合不再需要，由运行时检测）。
 
-因此产品的标签表除了地址标签，还必须包含**交易级集合**：已知 CoinJoin/混币交易、跨链桥协议交易。这是与 bybit_rust 对齐的关键。
+因此产品的标签表除了地址标签，还必须包含**交易级集合**：已知 CoinJoin/混币交易（跨链桥协议改由运行时 CrosschainDetector 判别）。这是与 bybit_rust 对齐的关键。
 
 ### 6.4 去重与节点/边状态
 

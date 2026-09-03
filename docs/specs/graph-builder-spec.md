@@ -74,7 +74,7 @@ class SubgraphResult:
 |---|---|---|
 | unspent | UTXO 在数据范围内未被花费 | 记录节点状态，不生成出边 |
 | out_of_range | spending tx block_time < seed_block_time − time_window_days*86400（早于窗口起点即停止） | 停止该分支扩展 |
-| early_stop | spending tx ∈ coinjoin_txids 或 crosschain_tx_set，或**启发式判定为 CoinJoin** | 生成 is_stopped_expansion=true 边，不向交易内部展开 |
+| early_stop | spending tx ∈ coinjoin_txids，或**运行时检测为 Crosschain**，或**启发式判定为 CoinJoin** | 生成 is_stopped_expansion=true 边，不向交易内部展开 |
 | tx4_new_dst | depth=3 目标地址此前未见 | 硬停止该分支 |
 | queue_empty | 三队列全部耗尽 | 正常结束 |
 
@@ -84,14 +84,15 @@ class SubgraphResult:
 
 - `coinjoin_txids: set[str]`：已知 CoinJoin / Wasabi / 混币器交易 ID 集合（**显式标记通道**，
   可与启发式判定叠加；该集合已不再从 step1_coinjoin csv 供给）
-- `crosschain_tx_set: dict[str, str]`：跨链 OP_RETURN txid → protocol 映射（e.g. "thorchain"）
 
-这些集合从 PostgreSQL 标签表加载到内存 set/dict。
+这些集合从 PostgreSQL 标签表加载到内存 set。跨链判定**不再**来自 DB/夹具标签表
+（issue #5 已删除 crosschain_tx_set 与 CrosschainTx ORM 模型）。
 
-**Crosschain 判定（issue #4 运行时检测）**：对每条消费交易，GraphBuilder 以
-`backend/detection/crosschain.py::CrosschainDetector` 的运行时 OP_RETURN / `vout.pegout`
-检测能力判别（Parser → Decoder Registry → Detector）；命中即记 `is_crosschain` 并 early-stop
-（写入 `op_return_protocol`）。`crosschain_tx_set` 仅作标签库兜底，主判定不依赖协议 if/else。
+**Crosschain 判定（issue #4/#5 运行时检测，唯一主判定来源）**：对每条消费交易，
+GraphBuilder 以 `backend/detection/crosschain.py::CrosschainDetector` 的运行时
+OP_RETURN / `vout.pegout` 检测能力判别（Parser → Decoder Registry → Detector）；
+命中即记 `is_crosschain` 并 early-stop（写入 `op_return_protocol`）。判定完全来自
+Esplora 交易字段，不新增协议 if/else，也不再回退到 CSV / crosschain_tx_set 标签库。
 详见 `docs/specs/crosschain-detect-spec.md`。
 
 **CoinJoin 判定（无 CSV 依赖）**：对每条消费交易，若其 txid 不在 `coinjoin_txids` 中，
