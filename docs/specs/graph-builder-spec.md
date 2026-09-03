@@ -88,6 +88,12 @@ class SubgraphResult:
 
 这些集合从 PostgreSQL 标签表加载到内存 set/dict。
 
+**Crosschain 判定（issue #4 运行时检测）**：对每条消费交易，GraphBuilder 以
+`backend/detection/crosschain.py::CrosschainDetector` 的运行时 OP_RETURN / `vout.pegout`
+检测能力判别（Parser → Decoder Registry → Detector）；命中即记 `is_crosschain` 并 early-stop
+（写入 `op_return_protocol`）。`crosschain_tx_set` 仅作标签库兜底，主判定不依赖协议 if/else。
+详见 `docs/specs/crosschain-detect-spec.md`。
+
 **CoinJoin 判定（无 CSV 依赖）**：对每条消费交易，若其 txid 不在 `coinjoin_txids` 中，
 GraphBuilder 直接以 `backend/detection/coinjoin.py::CoinJoinDetector` 的启发式规则按交易
 结构判别（扇入扇出宽度 + 等额输出占比 + 输出金额熵 + 输入地址唯一性 + 手续费占比 +

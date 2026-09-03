@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from .id_contract import edge_id, node_id
 from ..detection.coinjoin import CoinJoinDetector
+from ..detection.crosschain import CrosschainDetector
 
 # 与基线 step3_sub1_preprocessing.py 一致；≤ 阈值的输出整条丢弃
 DUST_THRESHOLD_BTC = 0.0001
@@ -145,12 +146,16 @@ class GraphBuilder:
         max_rounds: int = MAX_ROUNDS,
         dust_threshold_btc: float = DUST_THRESHOLD_BTC,
         coinjoin_detector: CoinJoinDetector | None = None,
+        crosschain_detector: CrosschainDetector | None = None,
     ) -> None:
         self.coinjoin_txids = coinjoin_txids or set()
         self.crosschain_tx_set = crosschain_tx_set or {}
         # 结构级启发式判定：任一消费交易不在 coinjoin_txids 集合里时，
         # 直接按交易结构规则判别是否 CoinJoin（无 CSV / ML 依赖）。
         self.coinjoin_detector = coinjoin_detector or CoinJoinDetector()
+        # 运行时跨链检测（issue #4）：GraphBuilder 依赖稳定的 Detector 接口，
+        # 不再新增协议 if/else。crosschain_tx_set 作为标签库兜底保留。
+        self.crosschain_detector = crosschain_detector or CrosschainDetector()
         self.max_nodes_per_layer = max_nodes_per_layer
         self.max_total_nodes = max_total_nodes
         self.fanout_truncate_threshold = fanout_truncate_threshold
@@ -521,7 +526,12 @@ class GraphBuilder:
         elif (spending_tx.txid in self.coinjoin_txids
               or self.coinjoin_detector.is_coinjoin(spending_tx)):
             outcome = "early_stop_wasabi"
+        elif (xdet := self.crosschain_detector.detect(spending_tx)).is_crosschain:
+            # issue #4：运行时 OP_RETURN / pegout 检测确认跨链，不新增协议 if/else
+            outcome = "early_stop_crosschain"
+            protocol = xdet.protocol
         elif spending_tx.txid in self.crosschain_tx_set:
+            # 标签库兜底（DB/fixture 预生成 txid→protocol 映射）
             outcome = "early_stop_crosschain"
             protocol = self.crosschain_tx_set[spending_tx.txid]
         else:

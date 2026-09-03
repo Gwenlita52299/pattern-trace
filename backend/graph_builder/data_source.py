@@ -66,6 +66,8 @@ class FixtureTxProvider:
         self.seed_addresses: list[str] = data.get("seed_addresses", [])
         self.coinjoin_txids: set[str] = set(data.get("coinjoin_txids", []))
         self.crosschain_tx_set: dict[str, str] = dict(data.get("crosschain_tx_set", {}))
+        # issue #4：带原始 OP_RETURN 脚本的检测场景样本（供 detection 单测加载）
+        self.op_return_scenarios: dict[str, dict] = data.get("op_return_scenarios", {})
         self._input_prevouts: dict[str, list[tuple[str, int]]] = {}
         self._tx_by_txid: dict[str, dict] = {}
         # outspend 权威索引：(prev_txid, prev_vout) -> 消费它的交易 txid。
@@ -106,7 +108,10 @@ class FixtureTxProvider:
                     if is_stopped(tx):
                         continue  # early_stop 截断：其输出不会作为下一层 UTXO 被消费
                     for idx, out in enumerate(tx.get("outputs", [])):
-                        received[out.get("address")].append((txid, idx))
+                        a = out.get("address")
+                        if not a:
+                            continue  # OP_RETURN / 不可追踪输出不入账本
+                        received[a].append((txid, idx))
 
         ext_counter: dict[str, int] = defaultdict(int)
         for _addr, txs in self.txs_by_address.items():
@@ -353,6 +358,13 @@ class LiveEsploraProvider:
             outputs=[{
                 "address": vout.get("scriptpubkey_address"),
                 "value": vout.get("value", 0) / 1e8,
+                # issue #4：保留 OP_RETURN 脚本字段，供 CrosschainDetector 运行时检测
+                "scriptpubkey": vout.get("scriptpubkey"),
+                "scriptpubkey_asm": vout.get("scriptpubkey_asm"),
+                "scriptpubkey_type": vout.get("scriptpubkey_type"),
+                "scriptpubkey_address": vout.get("scriptpubkey_address"),
+                # Liquid/Elements：vout.pegout 子对象单独保留（pegout 通道）
+                "pegout": vout.get("pegout"),
             } for vout in tx.get("vout", [])],
             # Esplora 区块时间在 status.block_time；未确认交易无该字段 → None。
             # 兜底兼容部分 provider 在顶层携带 block_time 的形态。
