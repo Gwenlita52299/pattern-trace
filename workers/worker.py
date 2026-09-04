@@ -40,8 +40,9 @@ def collect_stuck(session) -> tuple[list[str], list[str]]:
     - Report 卡 processing：worker 中途崩溃后该行永远占用 BE-27 并发配额
       → 需重新投递。
 
-    Judgment 卡 processing 不在此列：可能是另一 worker 正在执行，重放会
-    双跑（claim 抢占只挡 queued），交给 reclaim_zombies 判 TASK_TIMEOUT 终态。
+    Judgment 卡 processing 不在此列：可能是另一 worker 正在执行，且 run_analysis
+    的 claim 只从 queued 抢占（重放消息撞上 processing 直接 skipped），卡死行
+    交给 reclaim_zombies 判 TASK_TIMEOUT 终态。
     """
     from sqlalchemy import select
 
@@ -64,19 +65,27 @@ async def recover_stuck_tasks(ctx) -> None:
     """
     from sqlalchemy.orm import Session
 
-    from backend.api.app import get_db_engine
+    from backend.api.app import close_db_engine, get_db_engine
 
     engine = get_db_engine()
     with Session(engine) as session:
         queued_ids, report_ids = collect_stuck(session)
+    # ...enqueue 后统一释放连接池
+    close_db_engine()
     redis = ctx.get("redis")
+    if redis is None:  # arq 正常总会注入；缺守卫时 AttributeError 会令 worker 启动崩循环
+        print("[worker] recover: no redis in ctx; skip")
+        return
+    # 确定性 _job_id：原消息仍在队列时 arq 按 job key 去重跳过，避免双投递
     for jid in queued_ids:
         print(f"[worker] recover: re-enqueue judgment {jid}")
-        await redis.enqueue_job("run_analysis", jid)
+        await redis.enqueue_job("run_analysis", jid,
+                                _job_id=f"run_analysis:{jid}")
     for rid in report_ids:
         print(f"[worker] recover: re-enqueue report {rid}")
-        await redis.enqueue_job("run_report", rid)
-    engine.dispose()
+        await redis.enqueue_job("run_report", rid,
+                                _job_id=f"run_report:{rid}")
+    close_db_engine()
 
 
 class WorkerSettings:
@@ -87,5 +96,7 @@ class WorkerSettings:
     queue_name = os.environ.get("ARQ_QUEUE_GRAPH", "q_graph")
     on_startup = recover_stuck_tasks
     # 分析管线含 LLM 调用，可能远超默认 300s；worker 崩溃时任务由
-    # DB 侧 reclaim_zombies 兜底进终态，这里的超时只是单任务硬上限
-    timeout = int(os.environ.get("ARQ_JOB_TIMEOUT", "900"))
+    # DB 侧 reclaim_zombies 兜底进终态，这里的超时只是单任务硬上限。
+    # 注意：arq 只识别 WorkerSettings 里与 Worker.__init__ 同名的属性，
+    # 参数名是 job_timeout（写 timeout 会被静默忽略回退到默认 300s）
+    job_timeout = int(os.environ.get("ARQ_JOB_TIMEOUT", "900"))

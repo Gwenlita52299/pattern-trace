@@ -56,6 +56,8 @@ services:
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
       - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
+      # issue #22：显式指向共享卷挂载点，不依赖 WORKDIR 相对路径的隐式巧合
+      - REPORTS_DIR=/app/output/reports
     command: >
       sh -c "alembic upgrade head &&
              uvicorn backend.api.app:create_app --factory --host 0.0.0.0 --port 8000"
@@ -90,6 +92,7 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+      - REPORTS_DIR=/app/output/reports
     volumes:
       - report_files:/app/output/reports
     command: arq workers.worker.WorkerSettings

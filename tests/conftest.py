@@ -25,7 +25,7 @@ def _force_inprocess_queue(monkeypatch):
     在 test_issue22_persistent_queue.py 里用 fake pool 单独覆盖。
     """
 
-    async def _enqueue_fails(job_name, *args):
+    async def _enqueue_fails(*args, **kwargs):
         return False
 
     monkeypatch.setattr("backend.services.task_queue._enqueue",

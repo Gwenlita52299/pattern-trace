@@ -130,10 +130,12 @@ async def run_analysis(judgment_id: str, session=None) -> str | None:
             return "skipped"
 
         prior_status = row.status  # 先取值：update 的 synchronize_session 会改写已加载对象
+        # 只从 queued 抢占：重放消息撞上 processing 行直接 skipped，
+        # 否则第二个执行方会 claim 已在跑的行并双跑整个管线（issue #22）
         claimed = session.execute(
             update(Judgment)
             .where(Judgment.id == judgment_id,
-                   Judgment.status.in_(("queued", "processing")))
+                   Judgment.status == "queued")
             .values(status="processing"))
         if claimed.rowcount == 0:  # 并发竞争下被他人处理/终结
             session.rollback()

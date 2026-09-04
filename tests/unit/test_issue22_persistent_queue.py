@@ -57,14 +57,20 @@ def api_client(monkeypatch):
     reset_stores()
 
 
+def _report_model():
+    from backend.models.base import Report
+
+    return Report
+
+
 class FakePool:
     """记录 enqueue 调用的假 arq 连接池。"""
 
     def __init__(self):
         self.calls: list[tuple[str, tuple]] = []
 
-    async def enqueue_job(self, job_name, *args):
-        self.calls.append((job_name, args))
+    async def enqueue_job(self, job_name, *args, **kwargs):
+        self.calls.append((job_name, args, kwargs))
 
 
 def _use_fake_pool(monkeypatch) -> FakePool:
@@ -78,6 +84,7 @@ def _use_fake_pool(monkeypatch) -> FakePool:
 # ---------------------------------------------------------------------------
 # 投递路径：enqueue 优先，降级兜底
 # ---------------------------------------------------------------------------
+@requires_db
 class TestDispatchPaths:
     def test_analyze_enqueued_when_queue_available(self, api_client,
                                                    monkeypatch):
@@ -88,7 +95,9 @@ class TestDispatchPaths:
                             json={"address": _demo_seed()})
         assert r.status_code == 202, r.text
         jid = r.json()["judgment_id"]
-        assert ("run_analysis", (jid,)) in pool.calls
+        assert any(name == "run_analysis" and args == (jid,)
+                   and kw.get("_job_id") == f"run_analysis:{jid}"
+                   for name, args, kw in pool.calls)
         # 队列路径下无 worker 消费，DB 行应停留在 queued（API 不再抢跑）
         from backend.models.base import Judgment
 
@@ -113,7 +122,16 @@ class TestDispatchPaths:
                             params={"format": "html"}, headers=auth)
         assert r.status_code == 202, r.text
         rid = r.json()["report_id"]
-        assert ("run_report", (rid,)) in pool.calls
+        assert any(name == "run_report" and args == (rid,)
+                   for name, args, _kw in pool.calls)
+        try:
+            with Session(get_db_engine()) as session:
+                assert session.get(_report_model(), rid).status == "processing"
+        finally:
+            with Session(get_db_engine()) as session:
+                session.execute(delete(_report_model())
+                                .where(_report_model().id == rid))
+                session.commit()
 
     def test_analyze_fallback_completes_without_redis(self, api_client):
         """Redis 不可达（conftest 强制失败）：降级进程内执行仍能到终态。"""
@@ -144,6 +162,7 @@ class TestWorkerRecovery:
         from workers.worker import collect_stuck, recover_stuck_tasks
 
         seed_user("recover@test.com", "Passw0rd!123")
+        _clear_judgments()  # 清残行：同参数 partial unique index 会让 insert 报错
         with Session(get_db_engine()) as session:
             owner_id = session.execute(
                 text("SELECT id FROM users WHERE email='recover@test.com'")
@@ -173,10 +192,12 @@ class TestWorkerRecovery:
 
             pool = FakePool()
             asyncio.run(recover_stuck_tasks({"redis": pool}))
-            assert ("run_analysis", (jid,)) in pool.calls
-            assert ("run_report", (rid,)) in pool.calls
+            assert any(name == "run_analysis" and args == (jid,)
+                       for name, args, _kw in pool.calls)
+            assert any(name == "run_report" and args == (rid,)
+                       for name, args, _kw in pool.calls)
             # processing 的分析不重投：可能另一 worker 正在执行，重放会双跑
-            analysis_targets = [args[0] for name, args in pool.calls
+            analysis_targets = [args[0] for name, args, _kw in pool.calls
                                 if name == "run_analysis"]
             assert processing_jid not in analysis_targets
         finally:
