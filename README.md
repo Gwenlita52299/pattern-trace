@@ -26,13 +26,14 @@ frontend (Next.js + React Flow)      backend (FastAPI)            workers (arq)
                                          DeepSeek API (或本地 Ollama)
 ```
 
-- `backend/graph_builder/`：子图构建核心（D3 全局 ID 规范 `addr:*` / `tx:*` / `edge:*`）
-- `backend/retrieval/`：结构指纹 + 向量混合检索
-- `backend/llm_judge/`：provider 抽象与结构化判断
+- `backend/graph_builder/`：子图构建核心（BFS 三队列 + 五类终止条件，D3 全局 ID 规范 `addr:*` / `tx:*` / `edge:*`）
+- `backend/detection/`：CoinJoin / 跨链 OP_RETURN 运行时判定（模块化协议检测，取代旧跨链 CSV 标签库）
+- `backend/retrieval/`：结构指纹 + pgvector 向量混合召回 + 带属性 WL 子树核精排
+- `backend/llm_judge/`：provider 抽象（deepseek / ollama / OpenAI 兼容 / mock）与防幻觉结构化判断
 - `backend/services/`：分析编排、报告生成、种子案例
 - `workers/worker.py`：arq 入口（analyze 默认进程内执行，扩缩容时切换队列形态）
 - `ingest/`：Lazarus 切图、正负样本生成、embedding 计算
-- `tests/unit/`：221 条测试用例的自动化收口（含契约测试 CT-01~03）
+- `tests/unit/`：300+ 条测试用例的自动化收口（含契约测试 CT-01~03）
 - `tests/performance/`：PERF-01/02 nightly 性能基准
 - `infra/verify_phase*.sh`：各阶段门禁脚本（`verify_phase6.sh` 为发布门禁）
 
@@ -54,14 +55,17 @@ open http://localhost:8000/docs    # API 文档
 LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture python -m backend.services.seed_cases
 ```
 
-> 提示：默认走 DeepSeek（`LLM_PROVIDER=deepseek`），无需本地模型。若改用
-> `ollama` 本地推理，容器默认无模型，需拉取并让 backend/worker 使用同一模型名
-> （判决缓存 key 含 model，两侧必须一致）：
+> 提示：compose / config 默认走**本地 Ollama**（`LLM_PROVIDER=ollama`,
+> `LLM_MODEL=qwen3:30b-a3b`），容器默认无模型，需先拉取并让 backend/worker 使用同一
+> 模型名（判决缓存 key 含 model，两侧必须一致）：
 >
 > ```bash
-> docker exec pattern_trace-ollama-1 ollama pull qwen3:8b
-> LLM_PROVIDER=ollama LLM_MODEL=qwen3:8b docker compose up -d backend worker
+> docker exec pattern_trace-ollama-1 ollama pull qwen3:30b-a3b
 > ```
+>
+> 生产改走云端判断只需在 `.env` 里设 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-chat`、
+> `LLM_BASE_URL=https://api.deepseek.com` 并透传 `LLM_API_KEY`（见
+> [docs/production-runbook.md](docs/production-runbook.md)）。
 
 ### 仅跑后端开发环境
 
@@ -81,9 +85,9 @@ LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture uv run python tests/evaluation/run_e2e
 |---|---|
 | `JWT_SECRET` | **必填**，无弱默认（IF-04） |
 | `BOOTSTRAP_ADMIN_EMAIL/PASSWORD` | 首个 admin 账号，空则不 seed |
-| `LLM_PROVIDER` | `deepseek`（默认）/ `ollama` / OpenAI 兼容 / `mock`（测试与演示） |
-| `LLM_MODEL` | 默认 `deepseek-chat`；本地 ollama 可换 `qwen3:8b` 等 |
-| `LLM_BASE_URL` | `deepseek` 为 `https://api.deepseek.com`；`ollama` 为 `http://ollama:11434` |
+| `LLM_PROVIDER` | `ollama`（默认，本地推理）/ `deepseek`（生产推荐）/ OpenAI 兼容 / `mock`（测试与演示） |
+| `LLM_MODEL` | 默认 `qwen3:30b-a3b`（本地）；生产切 `deepseek-chat` |
+| `LLM_BASE_URL` | `ollama` 为 `http://localhost:11434`（compose 内为 `http://ollama:11434`）；`deepseek` 为 `https://api.deepseek.com` |
 | `GRAPH_DATA_MODE` | `fixture`（内置演示图，离线）/ `live`（Esplora 公网） |
 | `ESPLORA_API_URL` | live 数据源，默认 `https://mempool.space/api`（自动切 Blockstream 备用） |
 | `DEMO_SEEDS` | 匿名免登录白名单地址 CSV；空则用 fixture 内置 seed |
@@ -146,7 +150,7 @@ open http://localhost:3000
 |---|---|
 | [docs/user-guide.md](docs/user-guide.md) | 使用说明：从启动到完整业务闭环、API 直调要点与故障排查 |
 | [docs/production-runbook.md](docs/production-runbook.md) | 生产运行手册：当前配置、启动/回收、手工复现链路与排障 |
-| [docs/specs/](docs/specs/) | 八份模块 spec（grill-me 风格）+ 评审修订记录 |
+| [docs/specs/](docs/specs/) | 十份模块 spec（grill-me 风格，含 coinjoin / crosschain 检测 spec）+ 评审修订记录 |
 | [docs/spec-comparison-report.md](docs/spec-comparison-report.md) | 全局端到端校验结果 + spec↔实现差异比对与修复记录 |
 | [docs/project-schedule.md](docs/project-schedule.md) | 六阶段排期与门禁完成标志 |
 | [docs/qwen3-local-llm-feasibility.md](docs/qwen3-local-llm-feasibility.md) | 本地 LLM 选型依据 |
