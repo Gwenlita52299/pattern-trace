@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +22,9 @@ from sqlalchemy import select, update
 from ..models.base import Case, CaseAddress, Judgment, Report
 
 DOWNLOAD_TTL_SECONDS = 15 * 60
-REPORTS_DIR = Path("output/reports")
+# issue #22：API 与 worker 是不同容器，报告必须落在共享持久化存储上
+# （docker-compose 挂同名卷）；本地相对路径仅适配单容器默认形态
+REPORTS_DIR = Path(os.environ.get("REPORTS_DIR", "output/reports"))
 
 
 class ReportError(RuntimeError):

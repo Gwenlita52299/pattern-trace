@@ -59,6 +59,9 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              uvicorn backend.api.app:create_app --factory --host 0.0.0.0 --port 8000"
+    volumes:
+      # issue #22：报告文件由 worker 写、API 读，必须共享持久化存储
+      - report_files:/app/output/reports
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
       interval: 5s
@@ -87,6 +90,8 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+    volumes:
+      - report_files:/app/output/reports
     command: arq workers.worker.WorkerSettings
     healthcheck:
       test: ["CMD-SHELL", "arq --check workers.worker.WorkerSettings"]
@@ -111,3 +116,4 @@ services:
 volumes:
   pgdata:
   ollama_models:
+  report_files:

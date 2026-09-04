@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import math
 import time
@@ -90,7 +89,6 @@ class UserCreateRequest(BaseModel):
 # ---- stores (judgments/cases/reports 已迁移 DB；_users_db 仅作无 DB 环境降级) ----
 _users_db: dict[str, dict] = {}
 _refresh_store = RefreshTokenStore()
-_bg_tasks: set[asyncio.Task] = set()      # 强引用防 Task 被 GC
 _rate_buckets: dict[str, list[float]] = {}   # ip -> 最近命中时间戳
 _quota_counters: dict[str, int] = {}         # f"{ymd}:{ip}" -> 当日任务数
 _idempotency_keys: dict[str, tuple[str, str, float]] = {}  # key -> (body_hash, case_id, expires)
@@ -556,7 +554,8 @@ def create_app() -> FastAPI:
                     code, headers={"Retry-After": str(retry_after)})
 
         from ..models.base import Judgment
-        from ..services.orchestration import reclaim_zombies, run_analysis
+        from ..services.orchestration import reclaim_zombies
+        from ..services.task_queue import dispatch_analysis
 
         # 顺带回收僵尸任务（BE-40）：无专用定时进程时的低成本替代
         with Session(get_db_engine()) as session:
@@ -586,9 +585,9 @@ def create_app() -> FastAPI:
                 raise
             jid, created = existing.id, False
 
-        task = asyncio.create_task(run_analysis(jid))
-        _bg_tasks.add(task)
-        task.add_done_callback(_bg_tasks.discard)
+        # issue #22：经 Arq 持久化队列投递，API 重启不再丢失排队中的任务；
+        # Redis 不可达时 task_queue 内部降级为进程内任务（单实例部署形态）
+        await dispatch_analysis(jid)
 
         status_now = "queued"
         if not created:
@@ -865,7 +864,7 @@ def create_app() -> FastAPI:
         format: str = Query(default="pdf", pattern="^(pdf|html)$"),
         user: dict = Depends(require_role("investigator", "admin")),
     ):
-        from ..services.report_service import generate_report
+        from ..services.task_queue import dispatch_report
 
         rid = str(uuid.uuid4())
         with Session(get_db_engine()) as session:
@@ -883,9 +882,9 @@ def create_app() -> FastAPI:
                                created_by=str(user["id"])))
             session.commit()
 
-        task = asyncio.create_task(asyncio.to_thread(generate_report, rid))
-        _bg_tasks.add(task)
-        task.add_done_callback(_bg_tasks.discard)
+        # issue #22：报告经持久化队列由 worker 渲染，文件写入共享存储卷，
+        # 多实例/容器替换后仍可下载
+        await dispatch_report(rid)
         return {"report_id": rid, "status": "processing",
                 "poll_url": f"/api/v1/reports/{rid}"}
 
@@ -1135,5 +1134,4 @@ def reset_stores() -> None:
     _rate_buckets.clear()
     _quota_counters.clear()
     _idempotency_keys.clear()
-    _bg_tasks.clear()
     close_db_engine()
