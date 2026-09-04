@@ -17,6 +17,22 @@ CSRF_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 
 
 @pytest.fixture(autouse=True)
+def _force_inprocess_queue(monkeypatch):
+    """issue #22：单测环境没有 worker 消费 Redis 队列。
+
+    开发机若恰好在跑 Redis，enqueue 会成功但任务永远排队 → 分析测试挂起。
+    统一强制走 task_queue 的进程内降级路径，保证测试确定性；真实队列路径
+    在 test_issue22_persistent_queue.py 里用 fake pool 单独覆盖。
+    """
+
+    async def _enqueue_fails(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr("backend.services.task_queue._enqueue",
+                        _enqueue_fails)
+
+
+@pytest.fixture(autouse=True)
 def _reset():
     reset_stores()
     yield
