@@ -89,8 +89,6 @@ class UserCreateRequest(BaseModel):
 # ---- stores (judgments/cases/reports 已迁移 DB；_users_db 仅作无 DB 环境降级) ----
 _users_db: dict[str, dict] = {}
 _refresh_store = RefreshTokenStore()
-_rate_buckets: dict[str, list[float]] = {}   # ip -> 最近命中时间戳
-_quota_counters: dict[str, int] = {}         # f"{ymd}:{ip}" -> 当日任务数
 _idempotency_keys: dict[str, tuple[str, str, float]] = {}  # key -> (body_hash, case_id, expires)
 _current_request: ContextVar = ContextVar("request", default=None)
 _DB_ENGINE = None
@@ -208,18 +206,23 @@ def verify_embedding_model_lock_on_startup(settings=None) -> None:
 
 # ---- 匿名成本控制（spec §3）----
 def _check_anon_limits(ip: str, settings) -> tuple[str | None, int]:
-    """返回 (error_code, retry_after)；error_code None 表示放行。"""
-    now = time.time()
-    bucket = [t for t in _rate_buckets.get(ip, []) if now - t < 60]
-    if len(bucket) >= settings.anon_rate_per_min:
-        _rate_buckets[ip] = bucket
-        return "RATE_LIMITED", max(1, 60 - int(now - bucket[0]))
-    qkey = f"{time.strftime('%Y%m%d')}:{ip}"
-    if _quota_counters.get(qkey, 0) >= settings.anon_daily_quota:
-        return "QUOTA_EXCEEDED", 86400
-    bucket.append(now)
-    _rate_buckets[ip] = bucket
-    _quota_counters[qkey] = _quota_counters.get(qkey, 0) + 1
+    """返回 (error_code, retry_after)；error_code None 表示放行。
+
+    issue #23：经 RedisRateLimiter 原子计数，多实例共享；Redis 不可达时
+    限流器内部降级进程内（fail-open，见 rate_limit 模块 docstring）。
+    """
+    from ..core.rate_limit import get_rate_limiter
+
+    limiter = get_rate_limiter()
+    allowed, retry_after = limiter.hit(
+        "anon_rate", ip, limit=settings.anon_rate_per_min, window=60)
+    if not allowed:
+        return "RATE_LIMITED", retry_after
+    allowed, retry_after = limiter.hit(
+        "anon_quota", f"{time.strftime('%Y%m%d')}:{ip}",
+        limit=settings.anon_daily_quota, window=86400)
+    if not allowed:
+        return "QUOTA_EXCEEDED", max(retry_after, 86400)
     return None, 0
 
 
@@ -426,13 +429,40 @@ def create_app() -> FastAPI:
 
     # ---- auth ----
     @app.post("/api/v1/auth/login")
-    def login(body: LoginRequest):
+    def login(body: LoginRequest, request: Request):
+        from ..core.rate_limit import get_rate_limiter
+
+        ip = request.client.host if request.client else "-"
+        limiter = get_rate_limiter()
+        # SEC-05 登录爆破防护（issue #23）：先查历史失败计数再验证密码，
+        # IP 或账号任一维度超限即 429。不预增：只有真实失败才计数；
+        # 响应不区分计数维度与账号存在性，防枚举
+        for bucket, identity in (("login_ip", ip),
+                                 ("login_email", body.email)):
+            allowed, retry_after = limiter.check(
+                bucket, identity, settings.login_fail_limit)
+            if not allowed:
+                raise ProblemError(
+                    429, "too many failed login attempts; try again later",
+                    "RATE_LIMITED",
+                    headers={"Retry-After": str(retry_after)})
+
         user = _lookup_user(body.email)
         if user is None or not hasher.verify(body.password,
                                              user["hashed_password"]):
             # 不区分邮箱不存在/密码错误，防枚举（BE-03）
+            limiter.hit("login_ip", ip,
+                        limit=settings.login_fail_limit,
+                        window=settings.login_fail_window)
+            limiter.hit("login_email", body.email,
+                        limit=settings.login_fail_limit,
+                        window=settings.login_fail_window)
             raise ProblemError(401, "Invalid credentials",
                                "INVALID_CREDENTIALS")
+
+        # 成功登录清零双维度计数：正常用户不应被同 IP 历史失败拖累
+        limiter.reset("login_ip", ip)
+        limiter.reset("login_email", body.email)
 
         family_id = str(uuid.uuid4())
         refresh_jti = str(uuid.uuid4())
@@ -468,6 +498,21 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/auth/refresh")
     def refresh(request: Request, body: RefreshRequest | None = None):
+        from ..core.rate_limit import get_rate_limiter
+
+        # issue #23：认证路径统一限流（token 猜测/重放洪水的低成本防线）。
+        # check+hit 先于解码：无效 token 的洪水请求同样计入窗口
+        ip = request.client.host if request.client else "-"
+        limiter = get_rate_limiter()
+        allowed, retry_after = limiter.check(
+            "auth_ip", ip, settings.auth_rate_per_min)
+        if not allowed:
+            raise ProblemError(
+                429, "too many requests; try again later", "RATE_LIMITED",
+                headers={"Retry-After": str(retry_after)})
+        limiter.hit("auth_ip", ip, limit=settings.auth_rate_per_min,
+                    window=60)
+
         # 显式 body token 优先（客户端主动断言，reuse detection 依赖它）；
         # 浏览器场景无 body，回落到 HttpOnly Cookie
         raw_body_token = (body.refresh_token if body else "") or ""
@@ -1131,7 +1176,10 @@ def reset_stores() -> None:
     global _refresh_store
     _users_db.clear()
     _refresh_store = RefreshTokenStore()
-    _rate_buckets.clear()
-    _quota_counters.clear()
+    # 限流状态随单例重建（issue #23）：Redis 模式下计数在 Redis 侧，
+    # 重建只影响降级路径的进程内字典
+    from ..core.rate_limit import reset_rate_limiter
+
+    reset_rate_limiter()
     _idempotency_keys.clear()
     close_db_engine()
