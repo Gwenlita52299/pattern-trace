@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     llm_provider: str = "ollama"
     llm_model: str = "qwen3:30b-a3b"
     llm_base_url: str = "http://localhost:11434"
+    # LLM_API_KEY：云端 provider（DeepSeek/OpenAI 等）的密钥。
+    # pydantic-settings 优先级是环境变量 > .env 文件——本地 .env 与
+    # docker compose 透传的环境变量两条路都能到这里，providers 不再各自读 os.environ
+    llm_api_key: str = ""
     cookie_secure: bool = False         # SEC-02：生产强制 Secure；本地 dev 豁免
     # CORS 显式白名单（CSV）。allow_credentials=True 时禁止 "*"（backend-api-spec），
     # 默认放行本地前端；生产经 CORS_ORIGINS 注入正式域名
@@ -98,7 +102,10 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
-    model_config = {"env_file": ".env"}
+    # extra="ignore"：.env 里允许存在 Settings 未声明的变量（如 LLM_API_KEY，
+    # 由 providers 经 os.environ 直读，见 docker-compose.yml 注释），
+    # 否则 pydantic-settings 默认 forbidden 会让按文档配置的环境直接启动失败
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 _settings: Settings | None = None
