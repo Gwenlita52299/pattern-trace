@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     anon_rate_per_min: int = 10
     anon_daily_quota: int = 500
 
+    # 登录爆破防护（SEC-05）：失败按 IP 与账号双维度计数（issue #23），
+    # 任一维度超限即 429；成功登录清零
+    login_fail_limit: int = 10
+    login_fail_window: int = 60
+    # refresh 等认证路径的 IP 维度限流
+    auth_rate_per_min: int = 30
+
     # ingest（阶段2）— bybit_rust 基线数据根目录（含 results/ 与 data/）
     lazarus_data_dir: str = "/Users/gwenlita/Documents/bybit_rust/golden/python"
     ingest_synth_positives: int = 1500   # playbook 语料规模；0 关闭

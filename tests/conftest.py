@@ -33,6 +33,22 @@ def _force_inprocess_queue(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _force_memory_rate_limiter(monkeypatch):
+    """issue #23：单测强制限流器走进程内计数。
+
+    开发机若在跑 Redis，login_ip 等共享 key 的计数会跨测试残留，爆破
+    场景用例（SEC-05）会被历史失败计数劫持。多实例共享语义在
+    test_issue23 里用 FakeRedis 双实例单独覆盖。
+    """
+    import backend.core.rate_limit as rl
+
+    monkeypatch.setattr(rl, "_force_memory", True)
+    rl.reset_rate_limiter()
+    yield
+    rl.reset_rate_limiter()
+
+
+@pytest.fixture(autouse=True)
 def _reset():
     reset_stores()
     yield
