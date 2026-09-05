@@ -80,11 +80,14 @@ class _Sub:
             "op_return_protocol": protocol,
         }
         src_node = node_id("address", src)
+        # 合成语料：源侧消费金额 = 输入总额 × 占比（与真实语料口径一致）
+        value_ratio = round(rng.uniform(0.6, 1.0), 8)
         self.sub.edges.append({
             **base,
             "id": edge_id(src_node, node_id("transaction", txid)),
             "source": src_node, "target": node_id("transaction", txid),
-            "value_ratio": round(rng.uniform(0.6, 1.0), 8),
+            "value_ratio": value_ratio,
+            "src_value_btc": round(total_in * value_ratio, 8),
             "dst_value_btc": total_in * (1 - fee_ratio),
         })
 

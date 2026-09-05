@@ -36,9 +36,9 @@ except ImportError:  # 允许以脚本方式单独加载本模块
 _NODE_KEYS = ("id", "kind", "label", "first_layer", "total_received_btc",
               "total_sent_btc", "utxo_count", "direct_related_to_lazarus")
 _EDGE_KEYS = ("id", "source", "target", "txid", "tx_layer", "value_ratio",
-              "dst_value_btc", "total_num_inputs", "total_num_outputs",
-              "is_stopped_expansion", "is_remixer", "is_crosschain",
-              "op_return_protocol")
+              "src_value_btc", "dst_value_btc", "total_num_inputs",
+              "total_num_outputs", "is_stopped_expansion", "is_remixer",
+              "is_crosschain", "op_return_protocol")
 
 
 def validate_canonical_subgraph(canon: dict) -> dict:
