@@ -12,7 +12,7 @@ export default function LoginPage() {
   return (
     <Suspense fallback={
       <main className="mx-auto flex max-w-sm flex-col px-4 py-24">
-        <p className="text-sm text-slate-400">加载中…</p>
+        <p className="font-mono text-sm tracking-widest text-pt-faint">加载中…</p>
       </main>
     }>
       <LoginContent />
@@ -51,7 +51,7 @@ function LoginContent() {
 
   return (
     <main className="mx-auto flex max-w-sm flex-col px-4 py-24">
-      <h1 className="text-xl font-bold">登录 PatternTrace</h1>
+      <h1 className="font-mono text-lg font-semibold tracking-widest">登录 PatternTrace</h1>
       <form onSubmit={submit} className="mt-6 space-y-3">
         <input
           type="email"
@@ -60,7 +60,7 @@ function LoginContent() {
           placeholder="email"
           autoComplete="username"
           required
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-pt-line bg-pt-panel px-3 py-2 font-mono text-sm text-pt-ink outline-none focus:border-pt-amber"
         />
         <input
           type="password"
@@ -69,13 +69,13 @@ function LoginContent() {
           placeholder="password"
           autoComplete="current-password"
           required
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-pt-line bg-pt-panel px-3 py-2 font-mono text-sm text-pt-ink outline-none focus:border-pt-amber"
         />
-        {error && <p className="text-xs text-red-600">{error}</p>}
+        {error && <p className="text-xs text-red-400">{error}</p>}
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-lg bg-cyan-600 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
+          className="w-full rounded-lg bg-pt-amber py-2 text-sm font-semibold text-[#201601] hover:bg-pt-amber-hi disabled:opacity-50"
         >
           {busy ? '登录中…' : '登录'}
         </button>

@@ -10,17 +10,20 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-CN">
-      <body className="min-h-screen bg-slate-50 text-slate-900">
-        <header className="border-b border-slate-200 bg-white">
+      <body className="min-h-screen bg-pt-bg font-sans text-pt-ink antialiased">
+        <header className="border-b border-pt-line bg-pt-panel">
           <nav className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
-            <Link href="/" className="font-bold tracking-tight">
-              Pattern<span className="text-cyan-600">Trace</span>
+            <Link href="/" className="flex items-center gap-2 font-mono text-sm font-semibold tracking-widest">
+              <span aria-hidden className="inline-block h-3.5 w-3.5 border border-pt-amber">
+                <span className="m-[3px] block h-2 w-2 bg-pt-amber" />
+              </span>
+              PatternTrace
             </Link>
-            <Link href="/" className="text-sm text-slate-600 hover:text-slate-900">分析</Link>
-            <Link href="/patterns" className="text-sm text-slate-600 hover:text-slate-900">Patterns</Link>
-            <Link href="/cases" className="text-sm text-slate-600 hover:text-slate-900">Cases</Link>
+            <Link href="/" className="text-sm text-pt-muted hover:text-pt-ink">分析</Link>
+            <Link href="/patterns" className="text-sm text-pt-muted hover:text-pt-ink">Patterns</Link>
+            <Link href="/cases" className="text-sm text-pt-muted hover:text-pt-ink">Cases</Link>
             <div className="ml-auto">
-              <Link href="/login" className="text-sm text-slate-600 hover:text-slate-900">登录</Link>
+              <Link href="/login" className="text-sm text-pt-muted hover:text-pt-ink">登录</Link>
             </div>
           </nav>
         </header>

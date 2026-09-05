@@ -4,7 +4,7 @@
 // failed 态重试按钮以相同地址重新 POST 创建新 judgment（FE-03）；
 // 组件卸载取消轮询（FE-30）。
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import ErrorBoundary from '@/components/ErrorBoundary';
 import GraphCanvas from '@/components/GraphCanvas';
@@ -30,12 +30,16 @@ export default function AnalyzePage() {
   const selectedNode: GraphNode | undefined = subgraph?.nodes.find(
     (n) => n.id === selectedNodeId,
   );
+  // completed 但子图缺失/为空（如 live 模式下地址无近期活动）→ 显示无数据，
+  // 避免停留在「正在构建子图…」造成假卡死
+  const graphEmpty =
+    !subgraph || subgraph.nodes.length === 0;
 
-  // FE-02：挂载恢复轮询；卸载 abort（FE-30）。用 ref 防 StrictMode 双触发重复轮询
-  const startedRef = useRef(false);
+  // FE-02：挂载恢复轮询；卸载 abort（FE-30）。
+  // 不能用 startedRef 守卫「重复轮询」：StrictMode 双挂载时第一次轮询会被
+  // cleanup 的 cancelPolling 中止，而守卫会让第二次挂载跳过恢复 → 页面永远
+  // 停在「正在构建子图…」。pollJudgment 入口自带 pollAbort 竞态防重，足够了。
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
     void pollJudgment(judgmentId);
     return () => cancelPolling();
   }, [judgmentId, pollJudgment, cancelPolling]);
@@ -47,10 +51,7 @@ export default function AnalyzePage() {
         address: judgment.address,
         hops: judgment.hops ?? 3,
       });
-      // 仅重置守卫：router.replace 改变 id 后由上面的 effect 统一恢复轮询，
-      // 避免手动调用与 effect 并发两条轮询循环
-      startedRef.current = false;
-      router.replace(`/analyze/${newId}`);
+      router.replace(`/analyze/${newId}`); // 新 id 由上面的 effect 统一恢复轮询
     } catch {
       /* startAnalysis 抛错时 store 已置 error 态 */
     }
@@ -58,17 +59,17 @@ export default function AnalyzePage() {
 
   return (
     <main className="mx-auto flex max-w-7xl gap-4 px-4 py-6">
-      <section className="relative h-[calc(100vh-140px)] flex-1 overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <section className="relative h-[calc(100vh-140px)] flex-1 overflow-hidden rounded-xl border border-pt-line bg-[#0c0f13]">
         {subgraph ? (
           <ErrorBoundary>
-            <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg bg-white/90 px-3 py-1.5 text-xs shadow-sm ring-1 ring-slate-200">
-              <label htmlFor="layer-filter" className="text-slate-500">深度</label>
+            <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg border border-pt-line bg-pt-panel/90 px-3 py-1.5 font-mono text-xs shadow-sm backdrop-blur">
+              <label htmlFor="layer-filter" className="tracking-widest text-pt-muted">深度</label>
               <select
                 id="layer-filter"
                 value={maxLayer ?? ''}
                 onChange={(e) =>
                   setMaxLayer(e.target.value === '' ? null : Number(e.target.value))}
-                className="rounded border border-slate-200 px-1 py-0.5"
+                className="rounded border border-pt-line bg-pt-panel-2 px-1 py-0.5 text-pt-muted"
               >
                 <option value="">全部</option>
                 {[0, 1, 2].map((l) => (
@@ -84,26 +85,28 @@ export default function AnalyzePage() {
             />
           </ErrorBoundary>
         ) : (
-          <div className="flex h-full items-center justify-center text-sm text-slate-400">
-            {status === 'failed' ? '无子图数据' : '正在构建子图…'}
+          <div className="flex h-full items-center justify-center font-mono text-sm tracking-widest text-pt-faint">
+            {status === 'failed' || (status === 'completed' && graphEmpty)
+              ? '无子图数据'
+              : '正在构建子图…'}
           </div>
         )}
 
         {/* FE-16 节点详情侧栏 */}
         {selectedNode && (
-          <aside className="absolute right-3 top-14 z-10 w-64 rounded-lg border border-slate-200 bg-white/95 p-4 shadow-md">
+          <aside className="absolute right-3 top-14 z-10 w-64 rounded-lg border border-pt-line bg-pt-panel/95 p-4 shadow-md backdrop-blur">
             <button
               aria-label="关闭详情"
               onClick={() => useAnalysisStore.getState().selectNode(null)}
-              className="float-right text-xs text-slate-400 hover:text-slate-700"
+              className="float-right text-xs text-pt-faint hover:text-pt-ink"
             >
               ✕
             </button>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-pt-muted">
               {selectedNode.kind === 'address' ? '地址' : '交易'}
             </p>
-            <p className="break-all font-mono text-[11px]">{selectedNode.label ?? selectedNode.id}</p>
-            <dl className="mt-3 space-y-1 text-[11px] text-slate-600">
+            <p className="break-all font-mono text-[11px] text-pt-ink">{selectedNode.label ?? selectedNode.id}</p>
+            <dl className="mt-3 space-y-1 font-mono text-[11px] text-pt-muted">
               {selectedNode.first_layer !== undefined && (
                 <div>first_layer: L{selectedNode.first_layer}</div>
               )}
@@ -124,14 +127,14 @@ export default function AnalyzePage() {
       <aside className="w-96 shrink-0 space-y-4">
         <VerdictCard onRetry={() => void retry()} />
         {judgment?.address && (
-          <div className="rounded-xl border border-slate-200 bg-white p-4 text-xs text-slate-500">
-            <span className="text-slate-400">分析地址：</span>
-            <span className="break-all font-mono">{judgment.address}</span>
+          <div className="rounded-xl border border-pt-line bg-pt-panel p-4 font-mono text-xs text-pt-muted">
+            <span className="text-pt-faint">分析地址：</span>
+            <span className="break-all text-pt-ink">{judgment.address}</span>
           </div>
         )}
         <button
           onClick={() => reset()}
-          className="text-xs text-slate-400 underline hover:text-slate-600"
+          className="text-xs text-pt-faint underline hover:text-pt-muted"
         >
           重置本页状态
         </button>

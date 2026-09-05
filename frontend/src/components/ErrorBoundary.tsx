@@ -25,7 +25,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-300 text-sm text-slate-500">
+        <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-[#3a4250] font-mono text-sm tracking-widest text-pt-muted">
           数据格式异常
         </div>
       );

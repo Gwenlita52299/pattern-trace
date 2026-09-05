@@ -41,6 +41,8 @@ export interface GraphEdge {
   txid?: string;
   tx_layer?: string;
   value_ratio?: number;
+  // 源侧金额（addr→tx 边）：源地址在该交易中消费的 UTXO 金额（出金额）
+  src_value_btc?: number;
   dst_value_btc?: number;
   is_stopped_expansion?: boolean;
   is_remixer?: boolean;
