@@ -40,15 +40,25 @@ class TestIsolatedSync:
         return spy
 
     def test_live_mode_dispatches_to_anyio_thread(self, monkeypatch):
-        """live=True → 通过 anyio.to_thread.run_sync 执行。"""
+        """live=True → 通过 anyio.to_thread.run_sync 执行。
+
+        kwargs 经 functools.partial 打包后传入（anyio 3.x run_sync 只收位置参数），
+        断言解包 partial 后 func/args 与原始调用一致。
+        """
+        import functools
+
         from backend.services.orchestration import _isolated_sync
 
         calls: dict = {}
         self._spy(monkeypatch, calls)
         out = self._run(_isolated_sync(True, _blocking, 0.01, "v"))
         assert out == "v"
-        assert calls.get("func") is _blocking
-        assert calls.get("args") == ((0.01, "v"), {})
+        fn = calls.get("func")
+        if isinstance(fn, functools.partial):
+            assert fn.func is _blocking
+            assert fn.args == (0.01, "v")
+        else:
+            assert fn is _blocking
         assert calls.get("thread") is True
 
     def test_fixture_mode_stays_sync(self, monkeypatch):
