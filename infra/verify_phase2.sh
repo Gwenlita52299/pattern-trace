@@ -16,7 +16,7 @@ bad() { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
 pg() {
   .venv/bin/python - "$1" <<'PY'
 import os, sys
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 import psycopg
 conn = psycopg.connect(
     os.environ.get("DATABASE_URL", "postgresql://pt:pt@localhost:5432/patterntrace"),
@@ -101,7 +101,7 @@ echo "    positives(A)=${pos_a:-0} (confirmed=${pos_confirmed:-0}) negatives=${n
 echo "== IG-06 · 负样本约束抽查 =="
 bad_neg=$(.venv/bin/python - <<'PY'
 import os
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 from ingest.generate_negatives import generate
 rows = generate(100)
 bad = sum(1 for r in rows if any(e["is_remixer"] or e["is_crosschain"]
@@ -122,7 +122,7 @@ echo "    coinjoin_txids=${cj_n:-0} addresses_meta=${am_n:-0}"
   || bad "标签表缺失 cj=$cj_n am=$am_n"
 memload=$(.venv/bin/python - <<'PY'
 import os
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 from sqlalchemy.orm import Session
 from ingest.common import get_engine
 from ingest.load_labels import load_into_memory
@@ -150,7 +150,7 @@ groups=$(pg "SELECT count(*) FROM (SELECT name FROM patterns GROUP BY name HAVIN
 echo "== 完成标志1 · 知识库可查询（pgvector 检索）=="
 query_ok=$(.venv/bin/python - <<'PY'
 import os
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from ingest.common import get_engine, structural_features
@@ -175,7 +175,7 @@ if [ -n "$query_ok" ]; then echo "    $query_ok"; ok "余弦检索 Top-3 返回�
 echo "== IG-13 补充 · EXPLAIN 走索引 =="
 uses_idx=$(.venv/bin/python - <<'PY'
 import os
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 import psycopg
 conn = psycopg.connect(
     os.environ.get("DATABASE_URL", "postgresql://pt:pt@localhost:5432/patterntrace"),
@@ -204,7 +204,7 @@ echo "== IG-15 · 故障注入断点续跑 =="
 # 缓存不清会直接命中而绕过 provider，故障点永远不触发（IG-15 的正确语义）
 fault_out=$(EMBEDDING_FAULT_EVERY=1 .venv/bin/python - <<'PY'
 import os
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -236,7 +236,7 @@ case "$fault_out" in
 esac
 resume_ok=$(.venv/bin/python - <<'PY'
 import os
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from ingest.compute_embeddings import run

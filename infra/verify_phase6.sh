@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 PASS=0; FAIL=0
 ok()  { echo "  ✅ $1"; PASS=$((PASS+1)); }
 bad() { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
-export JWT_SECRET="${JWT_SECRET:-migration-placeholder}"
+export JWT_SECRET="${JWT_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
 
 echo "== 1. 测试收口 =="
 # 不加 CLI -q：pyproject addopts 已有 -q，叠加成 -qq 会隐藏 "N passed" 汇总行

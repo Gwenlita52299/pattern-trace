@@ -48,7 +48,7 @@ requires_db = pytest.mark.skipif(
 @pytest.fixture()
 def api_client(monkeypatch):
     """mock LLM provider 的隔离客户端；settings 缓存按环境变量重建。"""
-    monkeypatch.setenv("JWT_SECRET", "test-secret-for-ci-only")
+    monkeypatch.setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("LLM_MOCK_SCENARIO", raising=False)
     reset_settings()
@@ -196,7 +196,7 @@ class TestAnalyzeValidation:
         import os
 
         monkey_env = {"ANON_RATE_PER_MIN": "3", "JWT_SECRET":
-                      "test-secret-for-ci-only", "LLM_PROVIDER": "mock"}
+                      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "LLM_PROVIDER": "mock"}
         saved = {k: os.environ.get(k) for k in monkey_env}
         os.environ.update(monkey_env)
         reset_settings()

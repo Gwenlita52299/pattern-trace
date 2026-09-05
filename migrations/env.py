@@ -8,7 +8,8 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+# issue #27：不再注入 JWT_SECRET 弱默认。migration 只读模型 metadata，
+# 不调用 get_settings；若未来触发配置加载，缺失密钥即明确失败（fail-fast）
 
 from backend.models.base import Base
 import backend.models.knowledge  # noqa: F401  — 注册知识库表到 metadata

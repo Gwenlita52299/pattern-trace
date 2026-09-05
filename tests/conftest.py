@@ -4,8 +4,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# 环境隔离：JWT_SECRET 必须在 import config 前设置
-os.environ.setdefault("JWT_SECRET", "test-secret-for-ci-only")
+# 环境隔离：JWT_SECRET 必须在 import config 前设置。
+# issue #27 后 Settings 拒绝占位/弱密钥，测试注入显式开发密钥（64 hex）
+TEST_JWT_SECRET = "0123456789abcdef" * 4
+os.environ.setdefault("JWT_SECRET", TEST_JWT_SECRET)
 
 import pytest
 from fastapi.testclient import TestClient

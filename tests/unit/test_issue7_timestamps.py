@@ -96,7 +96,7 @@ def api_client(monkeypatch):
     from backend.api.app import create_app, reset_stores
     from backend.core.config import reset_settings
 
-    monkeypatch.setenv("JWT_SECRET", "test-secret-for-ci-only")
+    monkeypatch.setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("LLM_MOCK_SCENARIO", raising=False)
     reset_settings()

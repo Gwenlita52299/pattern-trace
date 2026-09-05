@@ -65,7 +65,7 @@ class TestRefreshEndpoint:
         assert resp.status_code == 401
 
     def test_expired_refresh_rejected(self, client):
-        settings_jwt = "test-secret-for-ci-only"
+        settings_jwt = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         expired = create_token(
             {"sub": "x@test", "jti": "old", "family": "fam", "typ": "refresh"},
             settings_jwt, -10,
