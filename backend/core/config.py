@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     llm_provider: str = "ollama"
     llm_model: str = "qwen3:30b-a3b"
     llm_base_url: str = "http://localhost:11434"
+    # LLM_API_KEY：云端 provider（DeepSeek/OpenAI 等）的密钥。
+    # pydantic-settings 优先级是环境变量 > .env 文件——本地 .env 与
+    # docker compose 透传的环境变量两条路都能到这里，providers 不再各自读 os.environ
+    llm_api_key: str = ""
     cookie_secure: bool = False         # SEC-02：生产强制 Secure；本地 dev 豁免
     # CORS 显式白名单（CSV）。allow_credentials=True 时禁止 "*"（backend-api-spec），
     # 默认放行本地前端；生产经 CORS_ORIGINS 注入正式域名

@@ -311,24 +311,24 @@ def get_llm_client(settings=None) -> LLMClient:
     if provider == "openai":
         return OpenAIClient(
             base_url=getattr(settings, "llm_base_url", "") or "https://api.openai.com/v1",
-            api_key=os.environ.get("LLM_API_KEY", ""),
+            api_key=getattr(settings, "llm_api_key", ""),
             model=settings.llm_model)
     if provider == "anthropic":
         return AnthropicClient(
             base_url=getattr(settings, "llm_base_url", "")
             or "https://api.anthropic.com",
-            api_key=os.environ.get("LLM_API_KEY", ""),
+            api_key=getattr(settings, "llm_api_key", ""),
             model=settings.llm_model)
     if provider == "vllm":
         return VLLMClient(
             base_url=settings.llm_base_url,
-            api_key=os.environ.get("LLM_API_KEY", "EMPTY"),
+            api_key=getattr(settings, "llm_api_key", "") or "EMPTY",
             model=settings.llm_model)
     if provider == "deepseek":
         return DeepSeekClient(
             base_url=getattr(settings, "llm_base_url", "")
             or "https://api.deepseek.com",
-            api_key=os.environ.get("LLM_API_KEY", ""),
+            api_key=getattr(settings, "llm_api_key", ""),
             model=settings.llm_model)
     if provider == "ollama":
         return OllamaClient(base_url=settings.llm_base_url, model=settings.llm_model)

@@ -49,7 +49,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
       - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
-      # get_llm_client 用 os.environ 直读 LLM_API_KEY，不经 .env 文件加载，必须在此透传
+      # LLM_API_KEY 由 Settings 声明读取（环境变量优先于 .env），必须在此透传进容器
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
