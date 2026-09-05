@@ -214,7 +214,7 @@ class GraphBuilder:
         utxos: list[UTXO_ENTRY] = []
         seen: set[tuple[str, int, str]] = set()
         try:
-            txs = self._address_txs(tx_provider, address)
+            txs = self._address_txs(tx_provider, address, st)
         except Exception as exc:
             # 部分失败语义：种子地址数据源不可达 → 降级，不产节点
             st.record_error(stage="esplora", address=address,
@@ -234,13 +234,23 @@ class GraphBuilder:
                     add(tx.txid, idx, address)
         return utxos
 
-    @staticmethod
-    def _address_txs(tx_provider, address: str) -> list:
+    def _address_txs(self, tx_provider, address: str, st) -> list:
         """地址交易枚举：优先 provider.address_txs（live 全量分页 / fixture），
-        否则回退到旧的 callable(address) 形态（纯测试桩/基准脚本）。"""
+        否则回退到旧的 callable(address) 形态（纯测试桩/基准脚本）。
+
+        issue #25：live provider 因页数上限截断历史时显式置 degraded——
+        子图基于不完整历史构建，不得伪装成 complete。
+        """
         if hasattr(tx_provider, "address_txs"):
-            return tx_provider.address_txs(address)
-        return tx_provider(address)
+            txs = tx_provider.address_txs(address)
+        else:
+            txs = tx_provider(address)
+        truncated = getattr(tx_provider, "truncated_addresses", None)
+        if truncated and address in truncated:
+            st.record_error(stage="esplora", address=address,
+                            error_code="HISTORY_TRUNCATED",
+                            message=truncated[address])
+        return txs
 
     # ------------------------------------------------------------------
     # spent_by 解析：给定 UTXO (utxo_txid, utxo_n)，找出消费它的交易。
