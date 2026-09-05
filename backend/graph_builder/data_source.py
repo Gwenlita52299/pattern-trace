@@ -204,42 +204,69 @@ class LiveEsploraProvider:
     MAX_RETRIES = 3
     # /address/:addr/txs 默认页大小；返回条数 < 该值即为末页（mempool.space / blockstream 均为 25）
     PAGE_SIZE = 25
+    # issue #25：高活跃地址分页硬上限（40 页 × 25 ≈ 1000 笔/地址），
+    # 防止单地址无限拉取拖垮分析时延；触顶即截断并记录
+    DEFAULT_MAX_PAGES = 40
     FALLBACKS = {
         "https://mempool.space/api": "https://blockstream.info/api",
         "https://blockstream.info/api": "https://mempool.space/api",
     }
 
     def __init__(self, base_url: str, timeout_seconds: float = 10.0,
-                 redis_client=None):
+                 redis_client=None, max_pages: int | None = None):
         self.base_url = base_url.rstrip("/")
         self.fallback_base = self.FALLBACKS.get(self.base_url)
         self.timeout_seconds = timeout_seconds
         self.breaker = CircuitBreaker()
         self.redis = redis_client
+        self.max_pages = max_pages if max_pages is not None \
+            else self.DEFAULT_MAX_PAGES
         self.httpx_client = None  # 惰性创建，进程内复用连接池
+        # issue #25：截断记录 address -> 原因，供 builder 置 degraded
+        # （provider 实例每次分析新建，无需跨实例清理）
+        self.truncated_addresses: dict[str, str] = {}
 
     def __call__(self, address: str) -> list:
         return self.address_txs(address)
 
-    def address_txs(self, address: str) -> list:
-        """地址交易全量分页拉取（issue #3：/address/:addr/txs +
-        /address/:addr/txs/chain/:last_seen_txid，直至末页），映射为 SimpleNamespace。
+    def _paged_raw(self, address: str) -> list[dict]:
+        """地址交易全量分页拉取：/address/:addr/txs +
+        /address/:addr/txs/chain/:last_seen_txid（issue #3/#25）。
 
-        修复「/address/:address/txs 单页可能遗漏历史输出」导致的根 UTXO 缺失问题。
+        - 重复交易按 txid 去重（备用端点切换 / 缓存回放可能产生重叠页）
+        - 到达 max_pages 硬上限即截断并登记 truncated_addresses
         """
         raw: list[dict] = []
+        seen_txids: set[str] = set()
         last_seen: str | None = None
-        while True:
+        pages_fetched = 0
+        while pages_fetched < self.max_pages:
             path = (f"/address/{address}/txs" if last_seen is None
                     else f"/address/{address}/txs/chain/{last_seen}")
             page = self._fetch(path)
+            pages_fetched += 1
             if not page:
-                break
-            raw.extend(page)
-            if len(page) < self.PAGE_SIZE:
-                break
+                return raw
+            fresh = [tx for tx in page if tx["txid"] not in seen_txids]
+            raw.extend(fresh)
+            seen_txids.update(tx["txid"] for tx in fresh)
             last_seen = page[-1]["txid"]
-        return [self._map_tx(tx) for tx in raw]
+            if len(page) < self.PAGE_SIZE:
+                return raw
+        # 页数预算耗尽仍未到末页 → 截断留痕（验收：记录因上限被截断）
+        self.truncated_addresses[address] = (
+            f"history truncated at {self.max_pages} pages "
+            f"(~{len(raw)} txs)")
+        return raw
+
+    def address_txs(self, address: str) -> list:
+        """地址交易全量分页拉取（issue #3：/address/:addr/txs +
+        /address/:addr/txs/chain/:last_seen_txid，直至末页或页数上限），
+        映射为 SimpleNamespace。
+
+        修复「/address/:address/txs 单页可能遗漏历史输出」导致的根 UTXO 缺失问题。
+        """
+        return [self._map_tx(tx) for tx in self._paged_raw(address)]
 
     def get_tx(self, txid: str) -> SimpleNamespace:
         """单笔交易详情（issue #3：GET /tx/:txid）。"""
@@ -273,10 +300,13 @@ class LiveEsploraProvider:
     def seed_block_time(self, address: str) -> float | None:
         """时间窗基准（spec §3 out_of_range）：种子地址最近一次上链活动。
 
-        只用首屏（最新）交易——block_time 最大值必然出现在最新一页，避免为窗口基准做全量分页。
+        issue #25：基于完整分页数据计算（此前只用首屏）。页间复用同一
+        _fetch 缓存 key，GraphBuilder 先拉地址后取基准时全部命中 L2，
+        不产生额外网络请求。截断时最新交易仍在首屏，基准不受影响，
+        但地址会留在 truncated_addresses 供 builder 置 degraded。
         """
-        data = self._fetch(f"/address/{address}/txs")
-        times = [t.block_time for t in (self._map_tx(x) for x in data)
+        times = [t.block_time for t in (self._map_tx(x)
+                                        for x in self._paged_raw(address))
                  if t.block_time is not None]
         return max(times) if times else None
 
@@ -391,7 +421,8 @@ def build_provider(settings) -> tuple[object, list[str]]:
     """按 settings.graph_data_mode 返回 (provider, demo_seed_addresses)。"""
     if settings.graph_data_mode == "live":
         return LiveEsploraProvider(settings.esplora_api_url,
-                                   redis_client=_sync_redis()), []
+                                   redis_client=_sync_redis(),
+                                   max_pages=settings.esplora_max_pages), []
     fixture = FixtureTxProvider.load()
     seeds = settings.demo_seeds_list or fixture.seed_addresses
     return fixture, seeds

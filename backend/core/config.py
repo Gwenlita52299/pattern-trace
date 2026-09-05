@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     # 阶段4 — LLM 判断与编排
     graph_data_mode: str = "fixture"     # fixture | live（live 走 esplora_api_url）
     esplora_api_url: str = "https://mempool.space/api"
+    # issue #25：live 模式地址历史分页硬上限（页 × Esplora 页大小 25）
+    esplora_max_pages: int = 40
     demo_seeds: str = ""                 # 匿名白名单地址 CSV；空则用 fixture 内 seed
     zombie_timeout_seconds: int = 120    # 进行中任务超时回收阈值（BE-40）
 
