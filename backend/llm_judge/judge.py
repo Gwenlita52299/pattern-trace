@@ -27,7 +27,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low", "no_match"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v4"  # issue #10：候选模式携带 source/provenance/evidence_status
+PROMPT_VERSION = "v5"  # issue #26：matched_pattern 必须引用本次检索候选
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -57,7 +57,9 @@ Rules:
 3. If no pattern matches, output risk_level="no_match" and recommended_action="review".
 4. Do not hallucinate transaction IDs or addresses.
 5. Confidence is a float between 0.0 and 1.0.
-6. reasoning must reference specific structural features of the input subgraph."""
+6. reasoning must reference specific structural features of the input subgraph.
+7. matched_pattern MUST be either null or the exact pattern_name of one of the \
+CANDIDATE PATTERNS listed in the input. Never invent a pattern name."""
 
 # issue #8：数据质量 degraded 时注入的提示——图不完整，须谨慎判断、说明局限、
 # 不能把观察到的图当作完整链路。
@@ -129,12 +131,15 @@ def _extract_json_object(text: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def parse_and_validate(raw: str, valid_ids: set[str]) -> JudgmentResult | None:
+def parse_and_validate(raw: str, valid_ids: set[str],
+                       candidate_names: set[str] | None = None) -> JudgmentResult | None:
     """硬校验：schema 类失败返回 None（触发重试）；规则类失败抛异常。
 
     - JSON 不可解析 / required 缺失 / 枚举非法 / confidence ∉ [0,1] → None
     - evidence 引用 ⊄ 子图 ID 空间 → JudgmentValidationError(含非法 ID 列表)
     - no_match 但 action≠review 或 matched_pattern 非 null → 异常（prompt rule 3）
+    - issue #26：matched_pattern 非 null 时必须是本次检索候选名称之一；
+      候选为空时必须为 null。candidate_names=None 时跳过该检查（直调兼容）
     """
     data = _extract_json_object(raw)
     if data is None:
@@ -163,6 +168,17 @@ def parse_and_validate(raw: str, valid_ids: set[str]) -> JudgmentResult | None:
         raise JudgmentValidationError(
             f"evidence references IDs outside the subgraph snapshot: {invalid}",
             invalid_ids=invalid,
+        )
+    # issue #26：引用收口到本次检索候选——防提示注入/幻觉伪造匹配模式
+    # （候选为空时 candidate_names 为空集，任何非 null 引用都会命中下面的 not in）
+    matched = data["matched_pattern"]
+    if matched is not None and candidate_names is not None \
+            and matched not in candidate_names:
+        raise JudgmentValidationError(
+            f"matched_pattern {matched!r} is not among the retrieved "
+            "candidate patterns; use an exact pattern_name from "
+            "CANDIDATE PATTERNS or null",
+            invalid_ids=[matched],
         )
     if data["risk_level"] == "no_match":
         if data["recommended_action"] != "review":
@@ -306,6 +322,7 @@ class LLMJudge:
         address: str,
         subgraph,
         candidates=(),
+        candidate_names: set[str] | None = None,
         builder_version: str = BUILDER_VERSION,
         model: str = "",
         prompt_version: str = PROMPT_VERSION,
@@ -351,7 +368,8 @@ class LLMJudge:
                 # 审计留痕：<think> 内容随结果落 judgments.thinking（spec §7）
                 self.last_thinking = thinking
             try:
-                result = parse_and_validate(cleaned, valid_ids)
+                result = parse_and_validate(cleaned, valid_ids,
+                                            candidate_names=candidate_names)
             except JudgmentValidationError as exc:
                 last_error = exc
                 continue

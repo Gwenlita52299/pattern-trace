@@ -239,6 +239,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             verdict = await judge.judge(
                 address=row.address, subgraph=canon,
                 candidates=retrieval.candidates,
+                # issue #26：把候选名称集合交给校验层收口 LLM 引用
+                candidate_names={c.name for c in retrieval.candidates},
                 builder_version=BUILDER_VERSION, model=settings.llm_model,
                 degraded=graph_degraded, missing_branches=missing_branches)
             break
@@ -251,6 +253,9 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     if verdict is None:
         raise ProviderFailure(provider_code or "LLM_PROVIDER_ERROR")
 
+    # issue #26：id 与 name 必须从同一候选对象派生。校验层已保证
+    # verdict.matched_pattern ∈ 候选名称或为 null，此处 name 取候选对象
+    # 本体（不透传 LLM 字符串），null 统一语义 = 风险成立但无知识库匹配
     matched = next((c for c in retrieval.candidates
                     if c.name == verdict.matched_pattern), None)
     latency_ms = int((time.perf_counter() - started) * 1000)
@@ -264,7 +269,7 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             subgraph_hash=canonical_subgraph_hash(canon),
             risk_level=verdict.risk_level,
             matched_pattern_id=matched.pattern_id if matched else None,
-            matched_pattern_name=verdict.matched_pattern,
+            matched_pattern_name=matched.name if matched else None,
             confidence=float(verdict.confidence),
             evidence=list(verdict.evidence),
             reasoning=verdict.reasoning,
