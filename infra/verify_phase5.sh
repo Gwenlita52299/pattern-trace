@@ -25,7 +25,7 @@ with conn.cursor() as cur:
 PY
 }
 
-export JWT_SECRET="${JWT_SECRET:-migration-placeholder}"
+export JWT_SECRET="${JWT_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
 
 echo "== 单元测试套件（含阶段5 新增用例）=="
 if .venv/bin/python -m pytest tests/unit/ -q 2>&1 | tail -1; then

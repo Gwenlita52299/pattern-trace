@@ -13,7 +13,7 @@ bad() { echo "  ❌ $1"; FAIL=$((FAIL+1)); }
 pg() {
   .venv/bin/python - "$1" <<'PY'
 import os, sys
-os.environ.setdefault("JWT_SECRET", "migration-placeholder")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 import psycopg
 conn = psycopg.connect(
     os.environ.get("DATABASE_URL", "postgresql://pt:pt@localhost:5432/patterntrace"),
@@ -84,7 +84,7 @@ vec_ok=$(pg "SELECT count(*) FROM patterns WHERE semantic_embedding IS NOT NULL 
 echo "== RT-04 · 启动 fail-fast 模型锁（负向验证）=="
 lock_result=$(EMBEDDING_MODEL=all-MiniLM-L6-v2 .venv/bin/python - <<'PY'
 import os
-os.environ["JWT_SECRET"] = "migration-placeholder"
+os.environ["JWT_SECRET"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 from backend.core.config import reset_settings
 reset_settings()
 try:
@@ -102,7 +102,7 @@ case "$lock_result" in
 esac
 lock_pass=$(.venv/bin/python - <<'PY'
 import os
-os.environ["JWT_SECRET"] = "migration-placeholder"
+os.environ["JWT_SECRET"] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 from backend.core.config import reset_settings
 reset_settings()
 try:

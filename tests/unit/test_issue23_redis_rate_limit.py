@@ -20,7 +20,7 @@ CSRF = {"X-Requested-With": "XMLHttpRequest"}
 
 @pytest.fixture()
 def api_client(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET", "test-secret-for-ci-only")
+    monkeypatch.setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("LLM_MOCK_SCENARIO", raising=False)
     reset_settings()

@@ -1,11 +1,42 @@
 """Pydantic Settings — backend-api-spec §1 core/config."""
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
+
+# 已知占位密钥（小写精确匹配）——出现即拒绝（issue #27）
+_PLACEHOLDER_JWT_SECRETS = {
+    "dev-secret", "change-me", "changeit", "secret", "password",
+    "test-secret-for-ci-only", "migration-placeholder",
+}
 
 
 class Settings(BaseSettings):
     database_url: str = "postgresql://pt:pt@localhost:5432/patterntrace"
     redis_url: str = "redis://localhost:6379/0"
+
+    # issue #27：JWT_SECRET 必填 + 强度校验，缺失/占位/弱熵一律启动失败——
+    # 弱密钥意味着任何知道默认值的人可伪造任意用户/管理员的 JWT
     jwt_secret: str
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _reject_weak_jwt_secret(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError(
+                "JWT_SECRET must be at least 32 characters "
+                f"(got {len(v)}); generate with: openssl rand -hex 32")
+        lowered = v.lower()
+        if lowered in _PLACEHOLDER_JWT_SECRETS or any(
+                p in lowered for p in ("change-me", "placeholder", "dev-secret")):
+            raise ValueError(
+                "JWT_SECRET is a known placeholder value; generate a random "
+                "secret with: openssl rand -hex 32")
+        if len(set(v)) < 10:
+            # 熵下限：64 个重复/近重复字符（如同一字符×N、短模式循环）
+            # 字典空间过小，与弱密钥无本质区别
+            raise ValueError(
+                "JWT_SECRET has insufficient entropy (fewer than 10 "
+                "distinct characters); use a random secret")
+        return v
     access_token_expire_minutes: int = 15
     refresh_token_days: int = 7
     llm_provider: str = "ollama"
@@ -74,11 +105,10 @@ _settings: Settings | None = None
 
 
 def get_settings() -> Settings:
+    """全局单例。issue #27：不再注入任何 JWT_SECRET 弱默认——
+    缺失/占位/弱密钥时 Settings 校验直接抛错，进程拒绝启动。"""
     global _settings
     if _settings is None:
-        import os
-
-        os.environ.setdefault("JWT_SECRET", "dev-secret")
         _settings = Settings()
     return _settings
 

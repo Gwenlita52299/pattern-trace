@@ -26,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-os.environ.setdefault("JWT_SECRET", "perf-nightly-secret")
+os.environ.setdefault("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ["GRAPH_DATA_MODE"] = "fixture"
 

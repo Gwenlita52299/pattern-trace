@@ -56,7 +56,7 @@ except ImportError:
 
 @pytest.fixture()
 def api_client(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET", "test-secret-for-ci-only")
+    monkeypatch.setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.delenv("LLM_MOCK_SCENARIO", raising=False)
     reset_settings()
@@ -412,7 +412,7 @@ class TestReliabilitySemantics:
         """直连编排函数的测试必须显式锁定 mock provider——
         否则 Settings 可能回落到 ollama，ConnectError 会被归类为 PROVIDER_ERROR。"""
         monkeypatch.setenv("LLM_PROVIDER", "mock")
-        monkeypatch.setenv("JWT_SECRET", "test-secret-for-ci-only")
+        monkeypatch.setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
         monkeypatch.delenv("LLM_MOCK_SCENARIO", raising=False)
         reset_settings()
         reset_stores()
