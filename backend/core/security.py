@@ -65,18 +65,30 @@ def create_token(payload: dict, secret: str, expires_in_seconds: int) -> str:
 
 
 def decode_token(token: str, secret: str) -> dict | None:
+    """验签 + 解析；任何失败（分段/编码/JSON/字段类型/签名/过期）统一返回 None。
+
+    issue #28：认证边界把一切畸形 token 视为「未认证」而非 500——
+    异常不外传，响应不含 token/密钥/内部细节。
+    """
     try:
+        if not isinstance(token, str) or not isinstance(secret, str):
+            return None
         header_b64, payload_b64, sig_b64 = token.split(".")
-    except ValueError:
+        signing_input = f"{header_b64}.{payload_b64}".encode()
+        expected = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, _b64url_decode(sig_b64)):
+            return None
+        payload = json.loads(_b64url_decode(payload_b64))
+        if not isinstance(payload, dict):
+            return None
+        exp = payload.get("exp", 0)
+        # exp 非数值（字符串/列表等字段类型异常）同样视为无效 token
+        if not isinstance(exp, (int, float)) or isinstance(exp, bool) \
+                or exp < time.time():
+            return None
+        return payload
+    except Exception:  # noqa: BLE001 — 解析/解码失败一律视为未认证（issue #28）
         return None
-    signing_input = f"{header_b64}.{payload_b64}".encode()
-    expected = hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
-    if not hmac.compare_digest(expected, _b64url_decode(sig_b64)):
-        return None
-    payload = json.loads(_b64url_decode(payload_b64))
-    if payload.get("exp", 0) < time.time():
-        return None
-    return payload
 
 
 class _MemoryRefreshStore:
