@@ -48,11 +48,11 @@ export default function Home() {
 
   return (
     <main className="mx-auto flex max-w-3xl flex-col items-center px-4 py-24">
-      <h1 className="text-3xl font-bold tracking-tight">
-        Pattern<span className="text-cyan-600">Trace</span>
+      <h1 className="font-mono text-2xl font-semibold tracking-widest">
+        PatternTrace
       </h1>
-      <p className="mt-2 text-sm text-slate-500">
-        BTC 链上洗钱模式追踪 · 子图构建 → 模式检索 → AI 判断
+      <p className="mt-3 text-sm tracking-wide text-pt-muted">
+        BTC 链上洗钱模式追踪 · 子图构建 → 前科比对 → AI 裁决
       </p>
 
       <form
@@ -62,8 +62,8 @@ export default function Home() {
           void submit(address);
         }}
       >
-        <label htmlFor="address" className="mb-1 block text-xs font-medium text-slate-600">
-          BTC 地址
+        <label htmlFor="address" className="mb-1 block text-[10px] uppercase tracking-[0.2em] text-pt-muted">
+          标的地址
         </label>
         <div className="flex gap-2">
           <input
@@ -71,13 +71,13 @@ export default function Home() {
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             placeholder="bc1q…"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm outline-none focus:border-cyan-500"
+            className="w-full rounded-lg border border-pt-line bg-pt-panel px-3 py-2 font-mono text-sm text-pt-ink outline-none focus:border-pt-amber"
           />
           <select
             value={hops}
             onChange={(e) => setHops(Number(e.target.value))}
             aria-label="分析跳数"
-            className="rounded-lg border border-slate-300 bg-white px-2 text-sm"
+            className="rounded-lg border border-pt-line bg-pt-panel-2 px-2 font-mono text-sm text-pt-muted"
           >
             {[1, 2, 3].map((h) => (
               <option key={h} value={h}>{h} hop</option>
@@ -86,30 +86,30 @@ export default function Home() {
           <button
             type="submit"
             disabled={submitting || !address.trim()}
-            className="rounded-lg bg-cyan-600 px-5 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
+            className="rounded-lg bg-pt-amber px-5 py-2 text-sm font-semibold text-[#201601] hover:bg-pt-amber-hi disabled:opacity-50"
           >
-            {submitting ? '提交中…' : '分析'}
+            {submitting ? '提交中…' : '展开子图并比对'}
           </button>
         </div>
 
-        {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+        {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
 
         {demoAddresses.length > 0 && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-slate-400">演示地址：</span>
+            <span className="text-xs text-pt-faint">演示地址：</span>
             {demoAddresses.map((a) => (
               <button
                 key={a}
                 type="button"
                 onClick={() => void submit(a)}
-                className="max-w-[280px] truncate rounded-full border border-slate-200 bg-white px-3 py-1 font-mono text-[10px] text-slate-500 hover:border-cyan-400 hover:text-cyan-700"
+                className="max-w-[280px] truncate rounded-full border border-pt-line bg-pt-panel px-3 py-1 font-mono text-[10px] text-pt-muted hover:border-pt-amber hover:text-pt-amber-hi"
               >
                 {a}
               </button>
             ))}
           </div>
         )}
-        <p className="mt-3 text-[11px] text-slate-400">
+        <p className="mt-3 text-[11px] text-pt-faint">
           免登录仅支持演示地址；登录后可分析任意地址。
         </p>
       </form>

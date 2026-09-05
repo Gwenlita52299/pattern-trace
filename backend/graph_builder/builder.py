@@ -69,6 +69,11 @@ class Edge:
     txid: str = ""
     tx_layer: str = ""  # tx2 | tx3 | tx4
     value_ratio: float = 0.0
+    # 源侧金额（addr→tx 边）：源地址在该交易中消费的 UTXO 金额（同地址多
+    # UTXO 共消费同一交易时为累加值）。tx→addr 边不携带（源侧是交易本身）；
+    # tx1 种子边携带 total_input（种子交易的输入总额）。前端兄弟节点排序按
+    # 此字段降序（「出金额」），缺失时回退 dst_value_btc。
+    src_value_btc: float = 0.0
     dst_value_btc: float = 0.0
     total_num_inputs: int = 0
     total_num_outputs: int = 0
@@ -460,6 +465,7 @@ class GraphBuilder:
                 source=seed_node.id, target=addr_id,
                 txid=seed_txid, tx_layer="tx1",
                 value_ratio=value / total_input if total_input > 0 else 0.0,
+                src_value_btc=total_input,
                 dst_value_btc=value,
                 total_num_inputs=len(inputs), total_num_outputs=len(outputs),
             ))
@@ -619,16 +625,22 @@ class GraphBuilder:
         src_id = node_id("address", utxo_addr)
         tx_node_id = node_id("transaction", spending_tx.txid)
         e_id = edge_id(src_id, tx_node_id)
+        inputs = getattr(spending_tx, "inputs", None) or []
+        outputs_raw = spending_tx.outputs or []
+        total_input = sum(i.get("value", 0) for i in inputs)
+        total_output = sum(o.get("value", 0) for o in outputs_raw)
+        # 该 UTXO 的消费金额（按 prev_txid/prev_vout 匹配交易输入）
+        utxo_value = next(
+            (i.get("value", 0) for i in inputs
+             if i.get("prev_txid") == utxo_txid and i.get("prev_vout") == utxo_n),
+            0)
         if e_id not in seen_edges:
             seen_edges.add(e_id)
-            inputs = getattr(spending_tx, "inputs", None) or []
-            outputs_raw = spending_tx.outputs or []
-            total_input = sum(i.get("value", 0) for i in inputs)
-            total_output = sum(o.get("value", 0) for o in outputs_raw)
             result.edges.append(Edge(
                 id=e_id, source=src_id, target=tx_node_id,
                 txid=spending_tx.txid, tx_layer=tx_layer,
                 total_num_inputs=len(inputs), total_num_outputs=len(outputs_raw),
+                src_value_btc=utxo_value,
                 dst_value_btc=total_output,
                 is_stopped_expansion=stopped,
                 is_remixer=(outcome == "early_stop_wasabi"),
@@ -643,6 +655,12 @@ class GraphBuilder:
                 return
             # 该消费交易节点纳入本层预算（去重：同一交易被多个 UTXO 消费只计一次）
             layer_budget.consume(tx_node_id, nodes_by_id)
+        else:
+            # 同地址多 UTXO 共消费同一笔交易（归集/扫币场景）：去重边已存在，
+            # 但本 UTXO 的消费额不能丢——累加到该边的 src_value_btc 上
+            dup = next((x for x in result.edges if x.id == e_id), None)
+            if dup:
+                dup.src_value_btc += utxo_value
 
         # 已消费但停止（unspent 已在上面处理）：out_of_range / early_stop 只计主状态，
         # 不产生向下展开的新地址分支（基线 Phase 1/2 即 return）。

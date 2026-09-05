@@ -39,7 +39,7 @@ export default function PatternsPage() {
   return (
     <Suspense fallback={
       <main className="mx-auto max-w-5xl px-4 py-10">
-        <p className="text-sm text-slate-400">加载中…</p>
+        <p className="font-mono text-sm tracking-widest text-pt-faint">加载中…</p>
       </main>
     }>
       <PatternsContent />
@@ -85,7 +85,7 @@ function PatternsContent() {
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10">
-      <h1 className="text-xl font-bold">Pattern 知识库</h1>
+      <h1 className="text-xl font-bold">前科档案库</h1>
 
       <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
         <select
@@ -98,7 +98,7 @@ function PatternsContent() {
             next.delete('page');
             router.replace(`/patterns?${next.toString()}`);
           }}
-          className="rounded border border-slate-300 px-2 py-1"
+          className="rounded border border-pt-line bg-pt-panel px-2 py-1 font-mono text-pt-muted"
         >
           <option value="">全部等级</option>
           <option value="A">Grade A</option>
@@ -115,27 +115,27 @@ function PatternsContent() {
             next.delete('page');
             router.replace(`/patterns?${next.toString()}`);
           }}
-          className="rounded border border-slate-300 px-2 py-1"
+          className="rounded border border-pt-line bg-pt-panel px-2 py-1 font-mono text-pt-muted"
         >
           <option value="">全部来源</option>
           <option value="confirmed">真实确认</option>
           <option value="synthetic">合成模板</option>
         </select>
-        {q && <span className="text-xs text-slate-400">search: {q}</span>}
+        {q && <span className="font-mono text-xs text-pt-faint">search: {q}</span>}
         {data && (
-          <span className="text-xs text-slate-400">
+          <span className="font-mono text-xs text-pt-faint">
             共 {data.total} 条 · 第 {data.page}/{Math.max(data.pages, 1)} 页
           </span>
         )}
       </div>
 
-      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-4 text-sm text-red-400">{error}</p>}
 
       {!error && data && (
         <>
           <table className="mt-4 w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-400">
+              <tr className="border-b border-pt-line text-[10px] uppercase tracking-[0.18em] text-pt-muted">
                 <th className="py-2">名称</th>
                 <th className="py-2">来源</th>
                 <th className="py-2">性质</th>
@@ -146,15 +146,15 @@ function PatternsContent() {
             </thead>
             <tbody>
               {data.items.map((p) => (
-                <tr key={p.id} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-2 font-mono text-xs">{p.name}</td>
-                  <td className="py-2 text-xs">{p.source}</td>
+                <tr key={p.id} className="border-b border-white/5 hover:bg-pt-panel">
+                  <td className="py-2 font-mono text-xs text-pt-ink">{p.name}</td>
+                  <td className="py-2 text-xs text-pt-muted">{p.source}</td>
                   <td className="py-2 text-xs">
                     <span
                       className={
                         p.provenance === 'synthetic'
-                          ? 'rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700'
-                          : 'rounded bg-emerald-50 px-1.5 py-0.5 font-medium text-emerald-700'
+                          ? 'rounded border border-pt-line bg-pt-panel-2 px-1.5 py-0.5 text-pt-muted'
+                          : 'rounded border border-pt-amber/40 bg-pt-amber/5 px-1.5 py-0.5 text-pt-amber-hi'
                       }
                       title={
                         p.provenance === 'synthetic'
@@ -165,9 +165,9 @@ function PatternsContent() {
                       {provenanceLabel(p.provenance)}
                     </span>
                   </td>
-                  <td className="py-2 text-xs">{p.evidence_grade}</td>
-                  <td className="py-2 text-xs">{p.node_count ?? '-'}</td>
-                  <td className="max-w-[220px] truncate py-2 font-mono text-[10px] text-slate-400">
+                  <td className="py-2 font-mono text-xs text-pt-muted">{p.evidence_grade}</td>
+                  <td className="py-2 font-mono text-xs text-pt-muted">{p.node_count ?? '-'}</td>
+                  <td className="max-w-[220px] truncate py-2 font-mono text-[10px] text-pt-faint">
                     {p.seed_address}
                   </td>
                 </tr>
@@ -179,14 +179,14 @@ function PatternsContent() {
             <button
               disabled={page <= 1}
               onClick={() => updateParams({ page: String(page - 1) })}
-              className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+              className="rounded border border-pt-line px-3 py-1 text-pt-muted hover:border-pt-amber hover:text-pt-amber-hi disabled:opacity-40 disabled:hover:border-pt-line disabled:hover:text-pt-muted"
             >
               上一页
             </button>
             <button
               disabled={!!data && page >= data.pages}
               onClick={() => updateParams({ page: String(page + 1) })}
-              className="rounded border border-slate-300 px-3 py-1 disabled:opacity-40"
+              className="rounded border border-pt-line px-3 py-1 text-pt-muted hover:border-pt-amber hover:text-pt-amber-hi disabled:opacity-40 disabled:hover:border-pt-line disabled:hover:text-pt-muted"
             >
               下一页
             </button>

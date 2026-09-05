@@ -50,6 +50,8 @@ export interface FlowEdge extends GraphEdge {
   txid: string;
   /** 入边交易金额：该交易输入侧总额（BTC）——展示为「出」（源地址流出额）。 */
   in_btc: number;
+  /** 源侧金额：该源地址在本交易中消费的 UTXO 金额（src_value_btc；缺省回退 in_btc）。 */
+  src_btc: number;
   /** 出边交易金额：该目标地址从本交易收到的金额（BTC）——展示为「入」（目标地址流入额）。 */
   out_btc: number;
   /** 参与本交易的输入/输出来源数量（来自 canonical 边统计，便于悬浮展示）。 */
@@ -71,6 +73,8 @@ interface TxGroup {
   txid: string;
   txLayer: string;
   inputs: Set<string>; // addr 节点 id
+  /** 每个输入地址自己的 addr→tx 边（携带其 src_value_btc，按源区分出金额） */
+  inputEdgeBySrc: Map<string, GraphEdge>;
   outputs: Map<string, GraphEdge>; // addr 节点 id → tx→addr 输出边
   inputEdge: GraphEdge | null; // 任一 addr→tx 边（其 dst_value_btc = 交易输出总额）
   isRemixer: boolean;
@@ -108,6 +112,7 @@ function classifyAndGroup(
         txid,
         txLayer: "",
         inputs: new Set(),
+        inputEdgeBySrc: new Map(),
         outputs: new Map(),
         inputEdge: null,
         isRemixer: false,
@@ -130,6 +135,7 @@ function classifyAndGroup(
       // addr→tx 消费边：A 在 tx 中作为输入
       const g = group(dstTx);
       g.inputs.add(e.source);
+      g.inputEdgeBySrc.set(e.source, e);
       g.inputEdge = g.inputEdge ?? e;
       g.txLayer = g.txLayer || e.tx_layer || "";
       g.isRemixer = g.isRemixer || !!e.is_remixer;
@@ -247,6 +253,7 @@ export function toAddressFlow(subgraph: {
           const edgeId = `flow:${srcId}->${txNodeId}:${g.txid}`;
           if (seenEdgeId.has(edgeId)) continue;
           seenEdgeId.add(edgeId);
+          const inEdge = g.inputEdgeBySrc.get(srcId);
           flowEdges.push({
             id: edgeId,
             source: srcId,
@@ -254,6 +261,7 @@ export function toAddressFlow(subgraph: {
             txid: g.txid,
             tx_layer: g.txLayer || undefined,
             in_btc: totalInput,
+            src_btc: inEdge?.src_value_btc ?? totalInput,
             out_btc: 0,
             is_stopped_expansion: true,
             is_remixer: g.isRemixer,
@@ -271,6 +279,7 @@ export function toAddressFlow(subgraph: {
     const { totalInput } = txAggregateAmounts(g);
     for (const srcId of g.inputs) {
       if (!addrNodeById.has(srcId)) continue;
+      const inEdge = g.inputEdgeBySrc.get(srcId);
       for (const [dstId, outEdge] of g.outputs) {
         if (!addrNodeById.has(dstId)) continue;
         const edgeId = `flow:${srcId}->${dstId}:${g.txid}`;
@@ -285,6 +294,7 @@ export function toAddressFlow(subgraph: {
           value_ratio: normalizeAmount(outEdge.value_ratio) || undefined,
           dst_value_btc: normalizeAmount(outEdge.dst_value_btc) || undefined,
           in_btc: totalInput,
+          src_btc: inEdge?.src_value_btc ?? totalInput,
           out_btc: normalizeAmount(outEdge.dst_value_btc),
           is_stopped_expansion: g.isStopped,
           is_remixer: g.isRemixer,

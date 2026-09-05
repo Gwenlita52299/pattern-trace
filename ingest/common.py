@@ -215,7 +215,8 @@ def _edge_dicts(row: dict) -> list[dict]:
         "is_crosschain": bool(row.get("is_crosschain")),
         "op_return_protocol": row.get("op_return_protocol"),
     }
-    # addr→tx：金额口径 = 该笔交易的总量（证据面板显示交易规模）
+    # addr→tx：金额口径 = 该笔交易的总量（证据面板显示交易规模）；
+    # src_value_btc = 源地址在该交易中消费的 UTXO 金额（前端兄弟节点排序用）
     parts = [
         {
             **base,
@@ -223,6 +224,7 @@ def _edge_dicts(row: dict) -> list[dict]:
             "source": node_id("address", src),
             "target": node_id("transaction", txid),
             "value_ratio": src_value / total_in if total_in > 0 else 0.0,
+            "src_value_btc": src_value,
             "dst_value_btc": total_out,
         }
     ]

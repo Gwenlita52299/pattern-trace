@@ -17,11 +17,13 @@
 // 内部订阅——高亮变化不重建 nodes 数组（引用稳定），只有受影响节点重渲染。
 // 布局：按 first_layer 左→右分层（BFS 深度即横轴），无额外依赖；
 // dagre 属 P2 打磨项。
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
   Controls,
+  Handle,
   MarkerType,
+  Position,
   type Edge as RFEdge,
   type Node as RFNode,
   type OnNodesChange,
@@ -54,6 +56,21 @@ function isHighlighted(id: string): string {
   return useContext(HighlightContext).has(id) ? " pt-highlight" : "";
 }
 
+// 拖动时 buildFlow 每帧重建所有节点的 data 对象；默认浅比较会令全部节点
+// 重渲染 → Handle 重测量 → handleBounds 每帧失效 → 相连的边被 React Flow
+// 卸载重挂载（视觉频闪）。按字段比较：位置变化不经过此组件（由 React Flow
+// wrapper 的 transform 承担），内容不变就不重渲染。
+function nodeDataEqual(
+  prev: { data: NodeData },
+  next: { data: NodeData },
+): boolean {
+  return (
+    prev.data.raw === next.data.raw &&
+    prev.data.collapsed === next.data.collapsed &&
+    prev.data.hasChildren === next.data.hasChildren
+  );
+}
+
 const AddressNode = memo(function AddressNode({
   data,
 }: {
@@ -65,21 +82,21 @@ const AddressNode = memo(function AddressNode({
     <div
       role="button"
       aria-label={`address ${data.raw.label ?? data.raw.id}`}
-      className={`relative rounded-lg border px-3 py-2 text-xs shadow-sm cursor-pointer transition-shadow ${
+      className={`relative rounded-lg border px-3 py-2 text-xs cursor-pointer transition-shadow ${
         mixer
-          ? "border-red-500 border-2 bg-white" // FE-13：混币器红框 + ⚠ 双编码
-          : "border-slate-300 bg-white"
+          ? "border-2 border-pt-amber bg-[#171a14]" // 调性规范：混币器=琥珀证据框 + ⚠ 双编码（不做红色警报）
+          : "border-[#2a3340] bg-pt-panel"
       }${hlClass}`}
       style={{ minWidth: 150 }}
     >
-      <div className="flex items-center gap-1 font-mono text-[10px] text-slate-700">
-        {mixer && <span aria-label="mixer warning">⚠</span>}
+      <div className="flex items-center gap-1 font-mono text-[10px] text-pt-ink">
+        {mixer && <span aria-label="mixer warning" className="text-pt-amber">⚠</span>}
         {(data.raw.label ?? data.raw.id).slice(0, 18)}
         {((data.raw.label ?? "").length > 18 || data.raw.id.length > 18) &&
           (data.raw.label ?? data.raw.id).length > 18 &&
           "…"}
       </div>
-      <div className="text-[10px] text-slate-400">
+      <div className="font-mono text-[10px] text-pt-muted">
         {data.raw.first_layer !== undefined ? `L${data.raw.first_layer}` : ""}
         {data.raw.total_received_btc !== undefined &&
           ` · Σ${data.raw.total_received_btc.toFixed(3)} BTC`}
@@ -89,7 +106,7 @@ const AddressNode = memo(function AddressNode({
           type="button"
           // nodrag：React Flow 在此按下时不要启动节点拖动；stopPropagation 防止冒泡到
           // 节点选中（React Flow onNodeClick）。
-          className="nodrag absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 bg-white text-[11px] font-bold leading-none text-slate-600 shadow-sm hover:bg-slate-100"
+          className="nodrag absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full border border-[#2a3340] bg-pt-panel-2 text-[11px] font-bold leading-none text-pt-muted hover:border-pt-amber hover:text-pt-amber-hi"
           onClick={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -101,9 +118,14 @@ const AddressNode = memo(function AddressNode({
           {data.collapsed ? "+" : "−"}
         </button>
       )}
+      {/* 边连接锚点：不可见但必须存在，否则 React Flow 丢弃所有边 */}
+      <Handle type="target" position={Position.Left} isConnectable={false}
+        className="!border-none !bg-transparent" />
+      <Handle type="source" position={Position.Right} isConnectable={false}
+        className="!border-none !bg-transparent" />
     </div>
   );
-});
+}, nodeDataEqual);
 
 /**
  * 终止交易节点（issue #9）：CoinJoin / Crosschain / Out of Range 等停止扩展的交易
@@ -119,31 +141,36 @@ const TerminalNode = memo(function TerminalNode({ data }: { data: NodeData }) {
     <div
       role="button"
       aria-label={`terminal transaction ${raw.txid ?? raw.id}`}
-      className={`relative rounded-lg border px-3 py-2 text-xs shadow-sm cursor-pointer transition-shadow ${
+      className={`relative rounded-lg border px-3 py-2 text-xs cursor-pointer transition-shadow ${
         isMixer
-          ? "border-purple-500 border-2 bg-purple-50"
+          ? "border-2 border-pt-amber bg-[#171a14]" // 混币终止交易：琥珀证据框
           : raw.is_crosschain
-            ? "border-blue-500 border-2 bg-blue-50"
-            : "border-slate-400 border-2 bg-slate-50"
+            ? "border-2 border-pt-medium bg-[#131722]"
+            : "border-2 border-dashed border-[#3a4250] bg-pt-panel-2"
       }${hlClass}`}
       style={{ minWidth: 150 }}
     >
-      <div className="flex items-center gap-1 font-mono text-[10px] text-slate-700">
-        {isMixer && <span aria-label="mixer">♻</span>}
+      <div className="flex items-center gap-1 font-mono text-[10px] text-pt-muted">
+        {isMixer && <span aria-label="mixer" className="text-pt-amber">♻</span>}
         terminal tx:{stopReason}
       </div>
-      <div className="break-all font-mono text-[10px] text-slate-600">
+      <div className="break-all font-mono text-[10px] text-pt-muted">
         {(raw.txid ?? raw.id).slice(0, 18)}
         {protocolLabel}
       </div>
+      {/* 终止交易是流向终点，只需 target 锚点 */}
+      <Handle type="target" position={Position.Left} isConnectable={false}
+        className="!border-none !bg-transparent" />
     </div>
   );
-});
+}, nodeDataEqual);
 
 const nodeTypes = { address: AddressNode, terminalTransaction: TerminalNode };
 
 function flowAmountLabel(e: FlowEdge): string {
-  const outAmt = e.in_btc ?? 0; // 出边：资金离开源地址进入交易（源侧流出额）
+  // 「出」侧用 src_btc（该源地址本人消费的 UTXO 金额，与兄弟节点排序同口径）；
+  // 旧快照无此字段时回退 in_btc（整笔交易输入总额）
+  const outAmt = e.src_btc ?? e.in_btc ?? 0;
   const inAmt = e.out_btc ?? 0; // 入边：资金进入目标地址（目标侧接收额）
   // 终止交易边（target=tx:<txid>，issue #9）：资金进入停止扩展的交易，无输出地址，
   // 只标注源侧流出额，避免出现误导性的「→入0」。
@@ -210,10 +237,10 @@ function buildFlow(
   maxLayer: number | null,
   collapsed: Set<string>,
   posMap: Record<string, { x: number; y: number }>,
+  dimMap: Record<string, { width: number; height: number }>,
   onToggle: (id: string) => void,
 ): {
   rfNodes: RFNode[];
-  rfEdges: RFEdge[];
   layoutPos: Record<string, { x: number; y: number }>;
 } {
   const hidden = hiddenSet(flow, collapsed);
@@ -222,7 +249,6 @@ function buildFlow(
       (maxLayer === null || (n.first_layer ?? 0) <= maxLayer) &&
       !hidden.has(n.id),
   );
-  const visibleIds = new Set(visible.map((n) => n.id));
 
   // 节点是否有下游（在层过滤范围之内）：决定是否显示展开/收回圆钮
   const childByLayer = new Set<string>();
@@ -233,13 +259,46 @@ function buildFlow(
     if (maxLayer === null || tLayer <= maxLayer) childByLayer.add(e.source);
   }
 
-  // 分层布局：同层节点纵向均排，层序即横轴
+  // 分层布局：列基准 = 节点的 first_layer（终端交易 = 输入地址层 + 1，即交易
+  // 发生的跳数）。列内排序（两级）：
+  //   1. 父节点行序——同一父节点扇出的子节点保持相邻，子树不交叉；
+  //   2. 同父的兄弟节点按「出金额」降序——即该父节点流向各子节点的金额
+  //      （src_value_btc，源地址在该交易中的消费额），大额在上，终端交易不例外。
+  const inAmount = new Map<string, number>(); // 节点收到的最大流入金额
+  const primaryParent = new Map<string, string>(); // 金额最大的入边的源节点
+  for (const e of flow.edges) {
+    // 出金额 = 源侧消费金额（src_value_btc）；旧快照无此字段时回退 dst_value
+    const amt = e.src_btc > 0 ? e.src_btc : (e.dst_value_btc ?? e.out_btc ?? 0);
+    if ((inAmount.get(e.target) ?? -1) < amt) {
+      inAmount.set(e.target, amt);
+      primaryParent.set(e.target, e.source);
+    }
+  }
+
   const byLayer = new Map<number, GraphNode[]>();
   visible.forEach((n) => {
     const layer = n.first_layer ?? 0;
     if (!byLayer.has(layer)) byLayer.set(layer, []);
     byLayer.get(layer)!.push(n);
   });
+
+  const nodeRank = new Map<string, number>(); // 全局行序（跨层比较父节点用）
+  let rankCursor = 0;
+  const sortedLayers = [...byLayer.keys()].sort((a, b) => a - b);
+  for (const layer of sortedLayers) {
+    const layerNodes = byLayer.get(layer)!;
+    layerNodes.sort((a, b) => {
+      // 父节点行序：无入边（种子）或父节点被过滤隐藏 → 视为 -1，排在该列最前
+      const ra = primaryParent.has(a.id) ? nodeRank.get(primaryParent.get(a.id)!) ?? -1 : -1;
+      const rb = primaryParent.has(b.id) ? nodeRank.get(primaryParent.get(b.id)!) ?? -1 : -1;
+      if (ra !== rb) return ra - rb;
+      const am = inAmount.get(a.id) ?? 0;
+      const bm = inAmount.get(b.id) ?? 0;
+      if (am !== bm) return bm - am; // 出金额降序：大额在上（终端交易不例外）
+      return a.id.localeCompare(b.id);
+    });
+    layerNodes.forEach((n) => nodeRank.set(n.id, rankCursor++));
+  }
 
   const rfNodes: RFNode[] = [];
   const layoutPos: Record<string, { x: number; y: number }> = {};
@@ -255,6 +314,12 @@ function buildFlow(
         id: n.id,
         type: n.kind === "terminalTransaction" ? "terminalTransaction" : "address",
         position: posMap[n.id] ?? lp, // 已见节点沿用已有/拖拽位置，新节点取布局位置
+        // 回填测量尺寸：React Flow 测得尺寸写入 store internals 的同时会派发
+        // dimensions change；本组件重建 nodes 时若不回填，节点丢失尺寸 →
+        // getNodeData 判定无效 → 相连的边被卸载重挂载（逐帧交替 = 拖动频闪）。
+        // dims 存 ref，不触发额外渲染。
+        width: dimMap[n.id]?.width,
+        height: dimMap[n.id]?.height,
         data: {
           raw: n,
           collapsed: collapsed.has(n.id),
@@ -266,6 +331,30 @@ function buildFlow(
       });
     });
   });
+
+  return { rfNodes, layoutPos };
+}
+
+/**
+ * 边的构建与节点位置（posMap）完全解耦：拖动时每帧重建 edges 数组会让
+ * React Flow 重挂载所有边组件（实测 SVG 组逐帧销毁重建 → 视觉频闪）。
+ * 边只依赖拓扑与可见性（flow / maxLayer / collapsed）。
+ */
+function buildEdges(
+  flow: AddressFlow,
+  maxLayer: number | null,
+  collapsed: Set<string>,
+): RFEdge[] {
+  const hidden = hiddenSet(flow, collapsed);
+  const visibleIds = new Set(
+    flow.nodes
+      .filter(
+        (n) =>
+          (maxLayer === null || (n.first_layer ?? 0) <= maxLayer) &&
+          !hidden.has(n.id),
+      )
+      .map((n) => n.id),
+  );
 
   const rfEdges: RFEdge[] = flow.edges
     .filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
@@ -281,17 +370,18 @@ function buildFlow(
         target: e.target,
         animated: false,
         label: label || undefined,
-        labelStyle: { fontSize: 9 },
+        labelStyle: { fontSize: 9, fill: "#8b93a1" },
+        labelBgStyle: { fill: "#141920" },
         style: e.is_stopped_expansion
-          ? { strokeDasharray: "6 4", stroke: "#94a3b8" }
+          ? { strokeDasharray: "6 4", stroke: "#3a4250" }
           : e.is_remixer
-            ? { stroke: "#ef4444" }
-            : undefined,
-        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12 },
+            ? { stroke: "#f0b429" } // 调性规范：回混边=琥珀证据色
+            : { stroke: "#2a3340" },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: e.is_stopped_expansion ? "#3a4250" : e.is_remixer ? "#f0b429" : "#2a3340" },
       } satisfies RFEdge;
     });
 
-  return { rfNodes, rfEdges, layoutPos };
+  return rfEdges;
 }
 
 export interface GraphCanvasProps {
@@ -328,8 +418,19 @@ export default function GraphCanvas({
     });
   }, []);
 
-  // 受控节点拖动：仅保存 position 类变更到 posMap，供受控渲染跟随。
+  // 受控节点拖动：position 存 posMap（受控渲染跟随）；dimensions 存 dimMap
+  // （回填到节点对象，防止重建时丢失尺寸导致边逐帧卸载重挂载，见 buildFlow）。
+  const dimMapRef = useRef<Record<string, { width: number; height: number }>>({});
   const handleNodesChange: OnNodesChange = useCallback((changes) => {
+    const dims = { ...dimMapRef.current };
+    let dimsChanged = false;
+    for (const ch of changes) {
+      if (ch.type === "dimensions" && ch.dimensions) {
+        dims[ch.id] = { width: ch.dimensions.width ?? 0, height: ch.dimensions.height ?? 0 };
+        dimsChanged = true;
+      }
+    }
+    if (dimsChanged) dimMapRef.current = dims;
     setPosMap((prev) => {
       let next: Record<string, { x: number; y: number }> | null = null;
       for (const ch of changes) {
@@ -344,9 +445,15 @@ export default function GraphCanvas({
 
   // 展示变换：canonical 子图 → 地址节点 + 交易边（含入/出边金额）。
   const flow = useMemo(() => toAddressFlow(subgraph), [subgraph]);
-  const { rfNodes, rfEdges, layoutPos } = useMemo(
-    () => buildFlow(flow, maxLayer ?? null, collapsed, posMap, handleToggle),
+  // 节点跟随 posMap（拖动每帧更新）；边与 posMap 解耦（见 buildEdges 注释），
+  // 两者依赖不同，拖动不再触发边重建/重挂载。
+  const { rfNodes, layoutPos } = useMemo(
+    () => buildFlow(flow, maxLayer ?? null, collapsed, posMap, dimMapRef.current, handleToggle),
     [flow, maxLayer, collapsed, posMap, handleToggle],
+  );
+  const rfEdges = useMemo(
+    () => buildEdges(flow, maxLayer ?? null, collapsed),
+    [flow, maxLayer, collapsed],
   );
 
   // 播种稳定位置：把每次首次出现的节点布局位置记入 posMap，折叠/过滤不跳动；
@@ -379,13 +486,14 @@ export default function GraphCanvas({
           onNodesChange={handleNodesChange}
           nodeTypes={nodeTypes}
           onNodeClick={(_evt, node) => handleSelect(node.id)}
-          onlyRenderVisibleElements // 大图虚拟化（200 节点性能预算）
+          // 注意：不要开 onlyRenderVisibleElements —— fitView 完成测量前视口判定
+          // 会把所有边裁剪掉（实测 17 节点 0 边），≤200 节点规模无性能压力
           nodesConnectable={false}
           elementsSelectable
           fitView
           proOptions={{ hideAttribution: true }}
         >
-          <Background gap={24} />
+          <Background gap={24} color="#1a2029" />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>

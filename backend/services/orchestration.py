@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import time
 from datetime import UTC, datetime
 
@@ -185,8 +186,11 @@ async def _isolated_sync(live: bool, fn, /, *args, **kwargs):
     fixture 模式（graph_data_mode != "live"）保持同步：构建 ~0.4ms，可忽略阻塞，
     且不引入线程切换，避免打破既有测试/CI。
     """
+    # anyio 的 run_sync 关键字参数是线程池选项（limiter/cancellable 等），
+    # 业务 kwargs 传进去会直接 TypeError——必须用 partial 打包后再进线程池
+    # （anyio 3.x/4.x 行为一致，升版本不能撤掉这个 partial）。
     if live:
-        return await anyio.to_thread.run_sync(fn, *args, **kwargs)
+        return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
     return fn(*args, **kwargs)
 
 
