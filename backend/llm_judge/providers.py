@@ -214,7 +214,9 @@ class OllamaClient(_HTTPClient):
 
 
 _ID_PATTERN = re.compile(r"(?:addr|tx|edge):[^\s\"'`,\]]+")
-_NAME_PATTERN = re.compile(r"^[-\w]+:\s*(.+)$", re.MULTILINE)
+# issue #26：只提取 CANDIDATE PATTERNS 的 pattern_name 行——此前 ^[-\w]+: 的宽
+# 正则会把 "seed: bc1q..." 等行也当候选名回显，新校验下这类引用会被拒绝
+_NAME_PATTERN = re.compile(r"^pattern_name:\s*(.+)$", re.MULTILINE)
 
 
 class MockLLMClient(LLMClient):
@@ -249,9 +251,7 @@ class MockLLMClient(LLMClient):
             (m["content"] for m in reversed(messages) if m["role"] == "user"), "")
         ids = _ID_PATTERN.findall(user_text)
         names = _NAME_PATTERN.findall(user_text)
-        matched = next((n.strip() for n in names
-                        if n.strip() and not n.startswith(("nodes", "edges"))),
-                       None)
+        matched = names[0].strip() if names else None
 
         if self.scenario == "invalid_evidence_all_retries":
             return json.dumps({
