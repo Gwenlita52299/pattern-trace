@@ -174,7 +174,10 @@ class TestAnalyzeValidation:
 
     def test_be11_bad_checksum_address_422(self, api_client):
         _login(api_client)
-        bad = "bc1qinvalidchecksum00000000000000000000000000000"
+        # 合法 charset 内破坏末位字符：单字符替换必然破坏 polymod 校验和
+        # （issue #24 后校验顺序细化，含非法字符的串会先报 invalid character）
+        seed = _demo_seed()
+        bad = seed[:-1] + ("q" if seed[-1] != "q" else "p")
         r = api_client.post("/api/v1/addresses/analyze",
                             json={"address": bad})
         assert r.status_code == 422
