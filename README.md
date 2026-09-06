@@ -25,7 +25,7 @@ frontend (Next.js + React Flow)      backend (FastAPI)            workers (arq)
         ├──────────────────────────────► │  JWT access+refresh      │
         │                                ├──────────────────────────┤
         │                          PostgreSQL (pgvector)   Redis (queue/cache)
-                                         DeepSeek API (或本地 Ollama)
+                                         DeepSeek API (或本地 llama.cpp)
 ```
 
 浏览器只与前端同源通信（`next.config.mjs` rewrites 转发到后端）：refresh cookie
@@ -47,30 +47,37 @@ frontend (Next.js + React Flow)      backend (FastAPI)            workers (arq)
 前置：Docker、`.env` 中配置 `JWT_SECRET` 与 bootstrap admin 密码（参考 `.env.example`）。
 
 ```bash
-docker compose up --build          # db / redis / ollama / backend / worker / frontend
+docker compose up --build          # db / redis / backend / worker / frontend
 open http://localhost:3000         # 前端
 open http://localhost:8000/docs    # API 文档
 ```
 
-迁移由 backend 容器自动执行；bootstrap admin 账号随首启 seed。离线演示
-（不依赖公网与真实模型）：
+迁移由 backend 容器自动执行；bootstrap admin 账号随首启 seed。默认 LLM 为
+DeepSeek 云端判断，`.env` 中配置 `LLM_API_KEY`（离线演示见下）。
+
+### 本地推理（可选）：llama.cpp + Qwen3.8-27B
+
+不依赖云端 API 的本地判断走 llama.cpp（`--profile local-llm`）：
+
+```bash
+docker compose --profile local-llm up --build
+```
+
+- 模型：`unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M`（~16GB），**首启自动从
+  HuggingFace 下载，请预留磁盘与等待时间**；本地已有 HF 缓存时可把
+  `~/.cache/huggingface` bind-mount 进 `llamacpp` 容器复用
+- **内存要求**：Docker Desktop VM 需 ≥20GB（Settings → Resources），
+  16GB 权重 + KV cache + 其余容器共占一台机器的统一内存
+- backend/worker 切到 `LLM_PROVIDER=openai_compatible`、
+  `LLM_BASE_URL=http://llamacpp:8080/v1`、`LLM_MODEL=qwen3.8-27b`
+  （须与 llama-server `--alias` 一致——判决缓存 key 含 model，两侧必须同值）
+
+### 离线演示（不依赖公网与真实模型）
 
 ```bash
 # mock provider 三档种子案例（high / low / no_match），秒级出结论
 LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture python -m backend.services.seed_cases
 ```
-
-> 提示：compose / config 默认走**本地 Ollama**（`LLM_PROVIDER=ollama`,
-> `LLM_MODEL=qwen3:30b-a3b`），容器默认无模型，需先拉取并让 backend/worker 使用同一
-> 模型名（判决缓存 key 含 model，两侧必须一致）：
->
-> ```bash
-> docker exec pattern_trace-ollama-1 ollama pull qwen3:30b-a3b
-> ```
->
-> 生产改走云端判断只需在 `.env` 里设 `LLM_PROVIDER=deepseek`、`LLM_MODEL=deepseek-chat`、
-> `LLM_BASE_URL=https://api.deepseek.com` 并透传 `LLM_API_KEY`（见
-> [docs/production-runbook.md](docs/production-runbook.md)）。
 
 ### 仅跑后端开发环境
 
@@ -90,9 +97,9 @@ LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture uv run python tests/evaluation/run_e2e
 |---|---|
 | `JWT_SECRET` | **必填**，无弱默认（IF-04） |
 | `BOOTSTRAP_ADMIN_EMAIL/PASSWORD` | 首个 admin 账号，空则不 seed |
-| `LLM_PROVIDER` | `ollama`（默认，本地推理）/ `deepseek`（生产推荐）/ OpenAI 兼容 / `mock`（测试与演示） |
-| `LLM_MODEL` | 默认 `qwen3:30b-a3b`（本地）；生产切 `deepseek-chat` |
-| `LLM_BASE_URL` | `ollama` 为 `http://localhost:11434`（compose 内为 `http://ollama:11434`）；`deepseek` 为 `https://api.deepseek.com` |
+| `LLM_PROVIDER` | `deepseek`（默认，生产推荐）/ OpenAI 兼容（llama.cpp 等本地推理）/ `mock`（测试与演示） |
+| `LLM_MODEL` | 默认 `deepseek-chat`；本地推理为 llama-server `--alias`（如 `qwen3.8-27b`） |
+| `LLM_BASE_URL` | 默认 `https://api.deepseek.com`；llama.cpp 为 `http://llamacpp:8080/v1` |
 | `GRAPH_DATA_MODE` | `fixture`（内置演示图，离线）/ `live`（Esplora 公网） |
 | `ESPLORA_API_URL` | live 数据源，默认 `https://mempool.space/api`（自动切 Blockstream 备用） |
 | `DEMO_SEEDS` | 匿名免登录白名单地址 CSV；空则用 fixture 内置 seed |
@@ -124,14 +131,15 @@ CI 只做验证门禁，不负责发布；交付形态是 docker compose 私有�
 
 ```bash
 git clone <repo> && cd pattern_trace
-cp .env.example .env          # 填写 JWT_SECRET / 生产 LLM / 数据源等
-docker compose up --build     # db / redis / ollama / backend / worker / frontend
+cp .env.example .env          # 填写 JWT_SECRET / LLM_API_KEY（deepseek）/ 数据源等
+docker compose up --build     # db / redis / backend / worker / frontend
 open http://localhost:3000
 ```
 
 - **迁移自动执行**：backend 容器启动即 `alembic upgrade head`，无需单独步骤。
 - **生产口径**：live 数据源 + DeepSeek 云端判断（见
-  [docs/production-runbook.md](docs/production-runbook.md)）；如需本地推理可切 `ollama`。
+  [docs/production-runbook.md](docs/production-runbook.md)）；如需本地推理可加
+  `--profile local-llm`（首启下载 ~16GB 模型，内存 ≥20GB，详见快速开始一节）。
 - 生产加固项（`COOKIE_SECURE`、`CORS_ORIGINS` 等）由 `.env` 注入，`docker compose`
   自行按需编排反向代理，不绑定任何平台。
 

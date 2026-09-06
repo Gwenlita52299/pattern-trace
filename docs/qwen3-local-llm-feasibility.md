@@ -1,5 +1,10 @@
 # PatternTrace · 本地 Qwen3 4-bit 量化模型可行性评估
 
+> **2026-09 更新（issue #63）**：Qwen3.8-27B（dense 27B，Apache 2.0）发布后本地
+> 推理选型升级为 **llama.cpp + unsloth UD-Q4_K_M**（~16GB，24GB 统一内存可行），
+> 经 OpenAI 兼容 API 接入；Ollama 从 compose 移除（provider 代码保留）。本文
+> 其余内容为 Qwen3 时代的选型评估记录，保留作历史依据。
+
 > 评估对象：Qwen3-8B 4-bit（AWQ/GPTQ/GGUF Q4_K_M）与 Qwen3-30B-A3B 4-bit（Q4_K_M，MoE 3.3B 激活）
 > 对照场景：PatternTrace llm-judge 模块（结构化 JSON 判断 + 证据引用校验）
 > 日期：2026-08-22
