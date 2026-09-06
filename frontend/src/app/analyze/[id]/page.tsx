@@ -10,7 +10,7 @@ import ErrorBoundary from '@/components/ErrorBoundary';
 import AnalysisStages from '@/components/AnalysisStages';
 import GraphCanvas from '@/components/GraphCanvas';
 import VerdictCard from '@/components/VerdictCard';
-import { useAnalysisStore, type GraphNode } from '@/store/analysis';
+import { ANALYSIS_STAGES, useAnalysisStore, type GraphNode } from '@/store/analysis';
 
 export default function AnalyzePage() {
   const params = useParams<{ id: string }>();
@@ -22,6 +22,7 @@ export default function AnalyzePage() {
   const highlightIds = useAnalysisStore((s) => s.highlightIds);
   const judgment = useAnalysisStore((s) => s.judgment);
   const selectedNodeId = useAnalysisStore((s) => s.selectedNodeId);
+  const stageProgress = useAnalysisStore((s) => s.stageProgress);
   const pollJudgment = useAnalysisStore((s) => s.pollJudgment);
   const cancelPolling = useAnalysisStore((s) => s.cancelPolling);
   const reset = useAnalysisStore((s) => s.reset);
@@ -36,6 +37,8 @@ export default function AnalyzePage() {
   const selectedNode: GraphNode | undefined = subgraph?.nodes.find(
     (n) => n.id === selectedNodeId,
   );
+  // 完成（或失败）前不呈现子图/结论：等进度条流势走满再揭示
+  const resultShown = status === 'completed' && stageProgress >= ANALYSIS_STAGES.length;
   // completed 但子图缺失/为空（如 live 模式下地址无近期活动）→ 显示无数据，
   // 避免停留在「正在构建子图…」造成假卡死
   const graphEmpty =
@@ -69,7 +72,7 @@ export default function AnalyzePage() {
       <AnalysisStages />
       <div className="flex gap-4">
       <section className="relative h-[calc(100vh-190px)] flex-1 overflow-hidden rounded-xl border border-pt-line bg-[#0c0f13]">
-        {subgraph ? (
+        {subgraph && resultShown ? (
           <ErrorBoundary>
             <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg border border-pt-line bg-pt-panel/90 px-3 py-1.5 font-mono text-xs shadow-sm backdrop-blur">
               <label htmlFor="layer-filter" className="tracking-widest text-pt-muted">深度</label>
@@ -98,7 +101,9 @@ export default function AnalyzePage() {
           <div className="flex h-full items-center justify-center font-mono text-sm tracking-widest text-pt-faint">
             {status === 'failed' || (status === 'completed' && graphEmpty)
               ? '无子图数据'
-              : '正在构建子图…'}
+              : status === 'completed'
+                ? '分析完成，正在呈现…'
+                : '正在构建子图…'}
           </div>
         )}
 
@@ -135,7 +140,12 @@ export default function AnalyzePage() {
       </section>
 
       <aside className="w-96 shrink-0 space-y-4">
-        <VerdictCard onRetry={() => void retry()} />
+        {/* 结论与子图同步揭示：失败立即呈现失败卡，成功等进度条走满 */}
+        {status === 'failed' || resultShown ? (
+          <VerdictCard onRetry={() => void retry()} />
+        ) : (
+          <VerdictCard forceLoading />
+        )}
         {judgment?.address && (
           <div className="rounded-xl border border-pt-line bg-pt-panel p-4 font-mono text-xs text-pt-muted">
             <span className="text-pt-faint">分析地址：</span>

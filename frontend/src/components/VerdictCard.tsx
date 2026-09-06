@@ -58,16 +58,18 @@ function fmtTs(ts?: string | null): string {
 
 export interface VerdictCardProps {
   onRetry?: () => void; // failed 态重试（重新发起 analyze）
+  /** 强制骨架态：成功结果由分析页在进度条走满后才揭示（reveal 门控） */
+  forceLoading?: boolean;
 }
 
-export default function VerdictCard({ onRetry }: VerdictCardProps) {
+export default function VerdictCard({ onRetry, forceLoading }: VerdictCardProps) {
   const status = useAnalysisStore((s) => s.status);
   const judgment = useAnalysisStore((s) => s.judgment);
   const progressText = useAnalysisStore((s) => s.progressText);
   const error = useAnalysisStore((s) => s.error);
   const setHighlight = useAnalysisStore((s) => s.setHighlight);
 
-  if (status === "idle" || status === "queued" || status === "processing") {
+  if (forceLoading || status === "idle" || status === "queued" || status === "processing") {
     return (
       <div className="rounded-xl border border-pt-line bg-pt-panel p-5" data-testid="verdict-loading">
         <div className="mb-3 h-4 w-2/3 animate-pulse rounded bg-pt-panel-2" />
