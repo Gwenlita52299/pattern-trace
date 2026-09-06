@@ -23,9 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <Link href="/" className="text-sm text-pt-muted hover:text-pt-ink">分析</Link>
             <Link href="/patterns" className="text-sm text-pt-muted hover:text-pt-ink">Patterns</Link>
-            {/* prefetch={false}：未登录时 prefetch /cases 会把 middleware 的 307
-                重定向产物缓存进 Router Cache，登录后 push 命中缓存被弹回 /login */}
-            <Link href="/cases" prefetch={false} className="text-sm text-pt-muted hover:text-pt-ink">Cases</Link>
+            <Link href="/cases" className="text-sm text-pt-muted hover:text-pt-ink">Cases</Link>
             <div className="ml-auto">
               <UserMenu />
             </div>

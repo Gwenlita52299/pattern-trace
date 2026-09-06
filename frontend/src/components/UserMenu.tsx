@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import LoginForm from '@/components/LoginForm';
+import { restoreSession } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 
 export default function UserMenu() {
@@ -15,6 +16,12 @@ export default function UserMenu() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // issue #43：整页刷新后内存态清空，挂载时凭标记 cookie 恢复
+  // 展示态与 access token；仅客户端执行，SSR 渲染未登录态不匹配无关
+  useEffect(() => {
+    restoreSession();
+  }, []);
 
   function openLogin() {
     // 窄屏降级：小模态框在手机上难以操作，直接走独立登录页
@@ -71,10 +78,8 @@ export default function UserMenu() {
         {menuOpen && (
           <div role="menu" className="absolute right-0 top-10 z-50 w-56 rounded-lg border border-pt-line bg-pt-panel p-1 shadow-xl">
             <p className="truncate px-3 py-2 font-mono text-xs text-pt-muted">{email}</p>
-            {/* prefetch={false}：与 layout.tsx 同因，避免 middleware 307 产物污染 Router Cache */}
             <Link
               href="/cases"
-              prefetch={false}
               onClick={() => setMenuOpen(false)}
               className="block rounded-md px-3 py-2 text-sm text-pt-ink hover:bg-pt-panel-2"
             >

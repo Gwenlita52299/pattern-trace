@@ -1,6 +1,6 @@
 "use client";
-// 登录页（frontend-spec §2 /login）：middleware 307 重定向与 API 401 兜底
-// 仍落在这里；表单抽到了 LoginForm（issue #42），与导航栏弹窗复用。
+// 登录页（frontend-spec §2 /login）：API 401 兜底与直接访问的落点；
+// 表单抽到了 LoginForm（issue #42），与导航栏弹窗复用。
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
