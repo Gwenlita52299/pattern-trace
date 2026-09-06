@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 
 # 锁文件先行以复用依赖层；npm ci 保证可复现安装
