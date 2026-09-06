@@ -333,6 +333,14 @@ export function resolveHighlightIds(
   for (const id of highlightIds) {
     if (id.startsWith(ADDR_PREFIX) && nodeIds.has(id)) {
       out.add(id); // 地址节点
+      // 与画布点击物证节点同语义：高亮相邻边与邻接节点（完整链路）
+      for (const e of flow.edges) {
+        if (e.source === id || e.target === id) {
+          out.add(e.id);
+          out.add(e.source);
+          out.add(e.target);
+        }
+      }
     } else if (id.startsWith(TX_PREFIX)) {
       const txid = txidOfNodeId(id);
       if (txid) {

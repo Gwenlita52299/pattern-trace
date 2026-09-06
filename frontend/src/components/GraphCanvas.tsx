@@ -27,6 +27,7 @@ import ReactFlow, {
   type Edge as RFEdge,
   type Node as RFNode,
   type OnNodesChange,
+  type ReactFlowInstance,
 } from "reactflow";
 import "reactflow/dist/style.css";
 
@@ -409,6 +410,16 @@ export default function GraphCanvas({
   const [posMap, setPosMap] = useState<Record<string, { x: number; y: number }>>({});
   // issue #39：点击物证节点产生的高亮（flow 空间 id：节点 + 关联边 + 邻接节点）
   const [evidenceFocus, setEvidenceFocus] = useState<{ id: string; ids: Set<string> } | null>(null);
+  // 折叠/过滤后重新 fitView：fitView prop 只在首次渲染生效
+  const rfRef = useRef<ReactFlowInstance | null>(null);
+  useEffect(() => {
+    // 等一拍让 React Flow 提交新的节点尺寸，否则按旧 bounds 拟合
+    const t = setTimeout(
+      () => rfRef.current?.fitView({ duration: 300, padding: 0.15 }),
+      60,
+    );
+    return () => clearTimeout(t);
+  }, [collapsed, maxLayer]);
 
   const handleSelect = useCallback(
     (id: string) => {
@@ -529,6 +540,7 @@ export default function GraphCanvas({
           nodesConnectable={false}
           elementsSelectable
           fitView
+          onInit={(inst) => (rfRef.current = inst)}
           proOptions={{ hideAttribution: true }}
         >
           <Background gap={24} color="#1a2029" />
