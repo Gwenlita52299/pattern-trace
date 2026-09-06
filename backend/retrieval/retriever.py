@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from sqlalchemy import bindparam, text
 
@@ -181,8 +182,15 @@ class Retriever:
 
     # -- 入口 ------------------------------------------------------------
     def retrieve(self, subgraph, *, exclude_ids: list[str] | None = None,
-                 k: int | None = None) -> RetrievalResult:
-        """subgraph: SubgraphResult 或 canonical dict。"""
+                 k: int | None = None,
+                 notify: "Callable[[str], None] | None" = None
+                 ) -> RetrievalResult:
+        """subgraph: SubgraphResult 或 canonical dict。
+
+        notify：issue #40 阶段进度回调（"retrieval_topk" / "wl_rerank"）。
+        """
+        notify = notify or (lambda _stage: None)
+        notify("retrieval_topk")
         canon = (subgraph if isinstance(subgraph, dict)
                  else subgraphresult_to_canonical(subgraph))
         if not canon.get("nodes"):
@@ -199,6 +207,7 @@ class Retriever:
         if not recalled:
             return RetrievalResult()
 
+        notify("wl_rerank")
         return self._rerank(canon, recalled, k or self.settings.retrieval_top_k)
 
     def _embed_canonical(self, canon: dict) -> list[float]:

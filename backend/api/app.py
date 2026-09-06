@@ -1126,6 +1126,27 @@ def _pattern_summary(p) -> dict:
     }
 
 
+def _current_stage(row) -> str | None:
+    """issue #40：处理中任务物的当前阶段（worker 写 Redis）。
+
+    终态返回 None（前端由 status 驱动终态渲染）；Redis 不可达也返回 None，
+    前端退化为整体 loading，不影响正确性。
+    """
+    if row.status not in ("queued", "processing"):
+        return None
+    try:
+        import redis
+
+        from ..core.config import get_settings
+
+        client = redis.Redis.from_url(get_settings().redis_url,
+                                      socket_connect_timeout=1)
+        val = client.get(f"judgment:stage:{row.id}")
+        return val.decode() if isinstance(val, bytes) else val
+    except Exception:  # noqa: BLE001 — 进度缺失降级，不影响轮询主流程
+        return None
+
+
 def _judgment_payload(row) -> dict:
     base = {
         "id": row.id,
@@ -1133,6 +1154,7 @@ def _judgment_payload(row) -> dict:
         "hops": row.hops,
         "time_window_days": row.time_window_days,
         "status": row.status,
+        "stage": _current_stage(row),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "concluded_at": row.concluded_at.isoformat()
         if row.concluded_at else None,

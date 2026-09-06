@@ -7,6 +7,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import ErrorBoundary from '@/components/ErrorBoundary';
+import AnalysisStages from '@/components/AnalysisStages';
 import GraphCanvas from '@/components/GraphCanvas';
 import VerdictCard from '@/components/VerdictCard';
 import { useAnalysisStore, type GraphNode } from '@/store/analysis';
@@ -125,6 +126,7 @@ export default function AnalyzePage() {
       </section>
 
       <aside className="w-96 shrink-0 space-y-4">
+        <AnalysisStages />
         <VerdictCard onRetry={() => void retry()} />
         {judgment?.address && (
           <div className="rounded-xl border border-pt-line bg-pt-panel p-4 font-mono text-xs text-pt-muted">

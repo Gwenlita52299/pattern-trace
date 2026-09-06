@@ -54,6 +54,9 @@ export interface JudgmentPayload {
   id: string;
   address: string;
   status: string;
+  // issue #40：当前分析阶段（worker 写 Redis，轮询下发）；
+  // queued/processing 时非空，终态为 null
+  stage?: 'building_subgraph' | 'retrieval_topk' | 'wl_rerank' | 'llm_judging' | null;
   hops?: number;
   time_window_days?: number;
   risk_level?: string | null;
@@ -77,6 +80,14 @@ export interface JudgmentPayload {
 
 const START_INTERVAL_MS = 2_000;
 const MAX_BACKOFF_MS = 5_000;
+
+// issue #40：阶段 → 文案；与后端 orchestration._report_stage 的 key 对齐
+export const STAGE_TEXT: Record<string, string> = {
+  building_subgraph: "正在构建子图（BFS）…",
+  retrieval_topk: "混合检索 Top-K…",
+  wl_rerank: "WL kernel 精排…",
+  llm_judging: "LLM 结构化判断中…",
+};
 const POLL_TIMEOUT_MS = Number(
   process.env.NEXT_PUBLIC_POLL_TIMEOUT_MS ?? 90_000,
 );
@@ -86,6 +97,7 @@ interface AnalysisState {
   subgraph: { nodes: GraphNode[]; edges: GraphEdge[] } | null;
   status: AnalysisStatus;
   progressText: string;
+  stage: string | null;
   error: string | null;
   highlightIds: Set<string>;
   selectedNodeId: string | null;
@@ -122,6 +134,7 @@ const initial = {
   subgraph: null,
   status: "idle" as AnalysisStatus,
   progressText: "",
+  stage: null as string | null,
   error: null as string | null,
   highlightIds: new Set<string>(),
   selectedNodeId: null as string | null,
@@ -167,6 +180,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
             status: "completed",
             judgment: j,
             subgraph: j.subgraph ?? null,
+            stage: null,
           });
           return;
         }
@@ -174,6 +188,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           set({
             status: "failed",
             judgment: j,
+            stage: j.stage ?? null,
             error: j.error_message ?? j.error_code ?? "analysis failed",
           });
           return;
@@ -181,8 +196,9 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
         set({
           status: "processing",
           judgment: j,
-          progressText:
-            j.status === "queued" ? "排队中，等待分析资源…" : "AI 分析中…",
+          stage: j.stage ?? null,
+          progressText: STAGE_TEXT[j.stage ?? ""] ??
+            (j.status === "queued" ? "排队中，等待分析资源…" : "AI 分析中…"),
         });
         interval = START_INTERVAL_MS; // FE-29：成功后退避计数器重置
       } catch (err) {
