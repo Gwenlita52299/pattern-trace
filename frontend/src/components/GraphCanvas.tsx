@@ -53,7 +53,8 @@ interface NodeData {
   onToggle: (id: string) => void;
 }
 
-function isHighlighted(id: string): string {
+// hook 命名（rules-of-hooks）：内部 useContext，调用点须在组件体内无条件调用
+function useHighlightMark(id: string): string {
   return useContext(HighlightContext).has(id) ? " pt-highlight" : "";
 }
 
@@ -77,7 +78,7 @@ const AddressNode = memo(function AddressNode({
 }: {
   data: NodeData;
 }) {
-  const hlClass = isHighlighted(data.raw.id);
+  const hlClass = useHighlightMark(data.raw.id);
   const mixer = data.raw.direct_related_to_lazarus;
   return (
     <div
@@ -134,7 +135,7 @@ const AddressNode = memo(function AddressNode({
  */
 const TerminalNode = memo(function TerminalNode({ data }: { data: NodeData }) {
   const raw = data.raw;
-  const hlClass = isHighlighted(raw.id);
+  const hlClass = useHighlightMark(raw.id);
   const stopReason = (raw.stop_reason ?? "out_of_range") as string;
   const protocolLabel = raw.is_crosschain && raw.protocol ? ` · ${raw.protocol}` : "";
   const isMixer = raw.is_remixer;
