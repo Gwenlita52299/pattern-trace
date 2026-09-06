@@ -1127,12 +1127,13 @@ def _pattern_summary(p) -> dict:
 
 
 def _current_stage(row) -> str | None:
-    """issue #40：处理中任务物的当前阶段（worker 写 Redis）。
+    """任务物的当前阶段（worker 写 Redis）。
 
-    终态返回 None（前端由 status 驱动终态渲染）；Redis 不可达也返回 None，
-    前端退化为整体 loading，不影响正确性。
+    processing/failed 都读取：failed 行的最后上报阶段即失败发生阶段，
+    前端据此把失败标到正确的步骤（issue #40 验收）；queued 无上报返回
+    None。Redis 不可达/键过期（TTL 1h）降级 None，前端回退到第一阶段。
     """
-    if row.status not in ("queued", "processing"):
+    if row.status not in ("queued", "processing", "failed"):
         return None
     try:
         import redis
