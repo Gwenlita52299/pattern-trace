@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import './globals.css';
 
+import UserMenu from '@/components/UserMenu';
+
 export const metadata: Metadata = {
   title: 'PatternTrace',
   description: 'BTC 链上模式追踪分析平台',
@@ -21,9 +23,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <Link href="/" className="text-sm text-pt-muted hover:text-pt-ink">分析</Link>
             <Link href="/patterns" className="text-sm text-pt-muted hover:text-pt-ink">Patterns</Link>
-            <Link href="/cases" className="text-sm text-pt-muted hover:text-pt-ink">Cases</Link>
+            {/* prefetch={false}：未登录时 prefetch /cases 会把 middleware 的 307
+                重定向产物缓存进 Router Cache，登录后 push 命中缓存被弹回 /login */}
+            <Link href="/cases" prefetch={false} className="text-sm text-pt-muted hover:text-pt-ink">Cases</Link>
             <div className="ml-auto">
-              <Link href="/login" className="text-sm text-pt-muted hover:text-pt-ink">登录</Link>
+              <UserMenu />
             </div>
           </nav>
         </header>
