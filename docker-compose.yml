@@ -106,10 +106,14 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # NEXT_PUBLIC_* 在 build 期内联，必须以 build arg 传入而非运行时 env
+      # rewrites 目的地烘焙于构建期（见 next.config.mjs）：容器网络内
+      # localhost 不是后端，必须用服务名
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+        - API_PROXY_URL=http://backend:8000
     ports: ["3000:3000"]
+    depends_on:
+      backend:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000"]
       interval: 10s

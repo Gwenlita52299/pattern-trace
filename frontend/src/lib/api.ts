@@ -3,8 +3,11 @@
 // 401 → refresh → 重放一次；refresh 失败清内存态跳 /login。
 import { useAuthStore } from "@/store/auth";
 
+// 同源相对路径（next.config.mjs rewrites 代理到后端）：浏览器与前端同源
+// 通信，refresh cookie same-origin，整页刷新后 restoreSession 能拿回会话。
+// NEXT_PUBLIC_API_URL 仅留给特殊部署显式指定绝对地址。
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+  process.env.NEXT_PUBLIC_API_URL ?? "/api/v1";
 
 const TIMEOUT_MS = 15_000;
 

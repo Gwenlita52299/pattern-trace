@@ -43,9 +43,8 @@ export default function LoginForm({ redirectTo, onSuccess }: LoginFormProps) {
         `pt_email=${encodeURIComponent(resp.user.email)}; Path=/; SameSite=Lax; max-age=604800`;
       if (redirectTo) {
         // 必须软导航：硬导航整页刷新会清空内存 token，此后每个请求都要走
-        // refresh——而 refresh cookie 是 SameSite=lax，前端经 127.0.0.1 访问时
-        // 对 localhost:8000 是 cross-site，cookie 不被携带，登录后立即被弹回。
-        // 软导航保留内存 token，GET /cases 直接带 Bearer 成功。
+        // refresh 轮换（多一次往返且刷新窗口内易撞并发恢复），软导航保留
+        // 内存 token，GET /cases 直接带 Bearer 成功。
         router.push(redirectTo);
       }
       onSuccess?.();

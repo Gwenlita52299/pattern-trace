@@ -94,8 +94,12 @@ export default function CaseDetailPage() {
         const r = await api<{ status: string; download_url?: string; error_code?: string }>(
           `/reports/${reportId}`);
         if (r.status === 'completed' && r.download_url) {
-          // 后端返回的是相对路径（/api/v1/...），拼接为指向后端的绝对地址
-          setReportState({ phase: 'ready', downloadUrl: `${API_BASE}${r.download_url}` });
+          // 后端返回相对路径且已含 /api/v1 前缀：同源代理下 API_BASE 即
+          // "/api/v1"，直接用相对路径；显式配置了绝对 API_BASE 时补 origin
+          const apiOrigin = API_BASE.startsWith('http')
+            ? API_BASE.replace(/\/api\/v1\/?$/, '')
+            : '';
+          setReportState({ phase: 'ready', downloadUrl: `${apiOrigin}${r.download_url}` });
         } else if (r.status === 'failed') {
           setReportState({ phase: 'failed', error: r.error_code ?? 'render failed' });
         } else {
