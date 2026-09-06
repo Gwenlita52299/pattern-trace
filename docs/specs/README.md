@@ -14,6 +14,7 @@
 | ingest/ | [ingest-spec.md](ingest-spec.md) | Lazarus 切图 + 负样本隔离 + 标签加载 + embedding 版本锁定 |
 | infra/ | [infra-spec.md](infra-spec.md) | Docker Compose(healthcheck) + 私有化部署 + GitHub Actions CI/CD |
 | tests/ | [tests-spec.md](tests-spec.md) | 单元/集成/E2E 测试策略 + 检索/LLM 评估脚本 + 性能基准 |
+| tests/performance/ | [stress-test-spec.md](stress-test-spec.md) | HTTP 层 Locust 压测：STRESS-01~04（读基线/读写混合/限流边界/Redis 降级）+ 万级灌数 |
 
 ## 关键跨文档决策（详见 review summary）
 
