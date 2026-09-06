@@ -1,11 +1,10 @@
 "use client";
-// 登录页（frontend-spec §2 /login）：成功后 access token 入内存 store，
-// 另设 pt_auth 标记 cookie 供 middleware 做登录信号（验签由后端 401 兜底）。
-import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useState } from 'react';
+// 登录页（frontend-spec §2 /login）：middleware 307 重定向与 API 401 兜底
+// 仍落在这里；表单抽到了 LoginForm（issue #42），与导航栏弹窗复用。
+import { useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 
-import { api } from '@/lib/api';
-import { useAuthStore } from '@/store/auth';
+import LoginForm from '@/components/LoginForm';
 
 export default function LoginPage() {
   // 静态预渲染要求 useSearchParams 位于 Suspense 边界内
@@ -21,65 +20,15 @@ export default function LoginPage() {
 }
 
 function LoginContent() {
-  const router = useRouter();
   const search = useSearchParams();
   const nextPath = search.get('next') ?? '/cases';
-
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const resp = await api<{
-        access_token: string;
-        user: { email: string; role: string };
-      }>('/auth/login', { method: 'POST', body: { email, password } });
-      useAuthStore.getState().setSession(resp.access_token, resp.user.email);
-      // middleware 的登录存在性信号（生产由后端 Set-Cookie refresh 承担）
-      document.cookie = 'pt_auth=1; Path=/; SameSite=Lax; max-age=86400';
-      router.push(nextPath);
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
-  }
 
   return (
     <main className="mx-auto flex max-w-sm flex-col px-4 py-24">
       <h1 className="font-mono text-lg font-semibold tracking-widest">登录 PatternTrace</h1>
-      <form onSubmit={submit} className="mt-6 space-y-3">
-        <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          placeholder="email"
-          autoComplete="username"
-          required
-          className="w-full rounded-lg border border-pt-line bg-pt-panel px-3 py-2 font-mono text-sm text-pt-ink outline-none focus:border-pt-amber"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="password"
-          autoComplete="current-password"
-          required
-          className="w-full rounded-lg border border-pt-line bg-pt-panel px-3 py-2 font-mono text-sm text-pt-ink outline-none focus:border-pt-amber"
-        />
-        {error && <p className="text-xs text-red-400">{error}</p>}
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-lg bg-pt-amber py-2 text-sm font-semibold text-[#201601] hover:bg-pt-amber-hi disabled:opacity-50"
-        >
-          {busy ? '登录中…' : '登录'}
-        </button>
-      </form>
+      <div className="mt-6">
+        <LoginForm redirectTo={nextPath} />
+      </div>
     </main>
   );
 }
