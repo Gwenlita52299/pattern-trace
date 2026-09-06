@@ -15,6 +15,10 @@ import time
 _force_memory = False   # 测试隔离：conftest 置 True 后跳过 Redis 建连
 _limiter: "RedisRateLimiter | None" = None
 
+# 运行中 Redis 掉线的重试冷却：期间直接走 memory，避免每请求阻塞在超时上
+# （对齐 task_queue 的 _fail_until 模式；构造期降级只覆盖「启动时就不在」形态）
+_REDIS_COOLDOWN = 5.0
+
 
 class RedisRateLimiter:
     """按 (bucket, identity) 维度的固定窗口计数限流。
@@ -26,6 +30,7 @@ class RedisRateLimiter:
     def __init__(self, redis_url: str = "", forced_memory: bool = False):
         self._memory: dict[str, tuple[int, float]] = {}  # key -> (count, expires_at)
         self._redis = None
+        self._down_until = 0.0  # monotonic 时间戳：冷却期内跳过 Redis 直接降级
         if redis_url and not forced_memory:
             try:
                 import redis
@@ -44,19 +49,31 @@ class RedisRateLimiter:
     def _key(bucket: str, identity: str) -> str:
         return f"rl:{bucket}:{identity}"
 
+    def _redis_ok(self) -> bool:
+        return self._redis is not None and time.monotonic() >= self._down_until
+
+    def _mark_redis_down(self, exc: Exception) -> None:
+        self._down_until = time.monotonic() + _REDIS_COOLDOWN
+        print(f"[rate_limit] redis op failed ({exc.__class__.__name__}); "
+              "fail-open to in-process counting (multi-instance "
+              "sharing disabled)")
+
     def check(self, bucket: str, identity: str,
               limit: int) -> tuple[bool, int]:
         """只读检查当前计数是否已达上限（不递增）。返回 (allowed, retry_after)。"""
-        if self._redis is not None:
+        if self._redis_ok():
             k = self._key(bucket, identity)
-            count = self._redis.get(k)
-            if count is None:
-                return True, 0
-            count = int(count)
-            if count < limit:
-                return True, 0
-            ttl = self._redis.ttl(k)
-            return False, max(1, ttl if ttl > 0 else 60)
+            try:
+                count = self._redis.get(k)
+                if count is None:
+                    return True, 0
+                count = int(count)
+                if count < limit:
+                    return True, 0
+                ttl = self._redis.ttl(k)
+                return False, max(1, ttl if ttl > 0 else 60)
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         count, expires_at = self._memory.get(
             self._key(bucket, identity), (0, 0.0))
         if time.time() >= expires_at:
@@ -68,15 +85,18 @@ class RedisRateLimiter:
     def hit(self, bucket: str, identity: str, *, limit: int,
             window: int) -> tuple[bool, int]:
         """计数 +1 并判断是否超限。返回 (allowed, retry_after)。"""
-        if self._redis is not None:
+        if self._redis_ok():
             k = self._key(bucket, identity)
-            count = self._redis.incr(k)
-            if count == 1:
-                self._redis.expire(k, window)
-            if count <= limit:
-                return True, 0
-            ttl = self._redis.ttl(k)
-            return False, max(1, ttl if ttl > 0 else window)
+            try:
+                count = self._redis.incr(k)
+                if count == 1:
+                    self._redis.expire(k, window)
+                if count <= limit:
+                    return True, 0
+                ttl = self._redis.ttl(k)
+                return False, max(1, ttl if ttl > 0 else window)
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         k = self._key(bucket, identity)
         now = time.time()
         count, expires_at = self._memory.get(k, (0, 0.0))
@@ -90,9 +110,12 @@ class RedisRateLimiter:
 
     def reset(self, bucket: str, identity: str) -> None:
         """成功认证后清零计数（避免正常用户被历史失败拖累）。"""
-        if self._redis is not None:
-            self._redis.delete(self._key(bucket, identity))
-            return
+        if self._redis_ok():
+            try:
+                self._redis.delete(self._key(bucket, identity))
+                return
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         self._memory.pop(self._key(bucket, identity), None)
 
 
