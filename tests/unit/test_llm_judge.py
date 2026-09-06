@@ -36,9 +36,9 @@ from backend.llm_judge.providers import (
     get_llm_client,
 )
 
+# 物证统一为 addr：evidence 只允许引用地址节点 id
 VALID_IDS = {
-    "addr:bc1qseed", "addr:a1", "tx:t1",
-    "edge:addr:bc1qseed->tx:t1", "edge:tx:t1->addr:a1",
+    "addr:bc1qseed", "addr:a1",
 }
 
 
@@ -60,7 +60,7 @@ def _subgraph() -> dict:
 
 
 def _verdict_json(*, risk="high", action="freeze", matched="mixer_layering",
-                  confidence=0.91, evidence=("tx:t1", "edge:tx:t1->addr:a1")) -> str:
+                  confidence=0.91, evidence=("addr:a1",)) -> str:
     return json.dumps({
         "risk_level": risk, "matched_pattern": matched,
         "confidence": confidence, "evidence": list(evidence),
@@ -421,7 +421,7 @@ class TestLJ17SchemaDegradation:
 class TestPromptAndPerf:
     def test_lj19_system_prompt_contains_core_rules(self):
         assert "Output ONLY valid JSON" in SYSTEM_PROMPT
-        assert 'Every ID in the "evidence" array MUST exist in the input subgraph' \
+        assert 'Every ID in the "evidence" array MUST be an address node id' \
                in SYSTEM_PROMPT
         assert 'If no pattern matches, output risk_level="no_match" ' \
                'and recommended_action="review".' in SYSTEM_PROMPT

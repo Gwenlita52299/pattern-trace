@@ -27,7 +27,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low", "no_match"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v5"  # issue #26：matched_pattern 必须引用本次检索候选
+PROMPT_VERSION = "v6"  # 物证统一为 addr：evidence 只允许引用地址节点 id
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -53,7 +53,9 @@ money-laundering patterns, assess the risk level.
 
 Rules:
 1. Output ONLY valid JSON matching the provided schema.
-2. Every ID in the "evidence" array MUST exist in the input subgraph nodes or edges.
+2. Every ID in the "evidence" array MUST be an address node id \
+("addr:...") from the input subgraph. Cite addresses only — never \
+transaction or edge IDs.
 3. If no pattern matches, output risk_level="no_match" and recommended_action="review".
 4. Do not hallucinate transaction IDs or addresses.
 5. Confidence is a float between 0.0 and 1.0.
@@ -208,9 +210,11 @@ def _plain(obj):
 
 
 def subgraph_valid_ids(subgraph) -> set[str]:
+    """物证引用空间：仅地址节点 id（物证统一为 addr，tx/edge 不再可引用）。"""
     nodes = _view(subgraph, "nodes") or []
-    edges = _view(subgraph, "edges") or []
-    return {_view(n, "id") for n in nodes} | {_view(e, "id") for e in edges}
+    return {_view(n, "id") for n in nodes
+            if isinstance(_view(n, "id"), str)
+            and _view(n, "id").startswith("addr:")}
 
 
 def build_messages(subgraph, candidates, retry_note: str | None = None,

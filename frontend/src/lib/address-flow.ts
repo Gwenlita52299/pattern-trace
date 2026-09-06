@@ -317,11 +317,11 @@ export function toAddressFlow(subgraph: {
 }
 
 /**
- * 把 canonical 证据 ID（addr:/tx:/edge:）解析为本视图要高亮的「节点 id + 边 id」集合。
+ * 把物证 ID 解析为本视图要高亮的「节点 id + 边 id」集合。
  *
- * - addr:<A> → 节点 addr:<A>（地址节点 id 在流式视图中保持不变）。
- * - tx:<T>  → 该交易的所有 A→B 边 + 其两端地址节点。
- * - edge:<S>-><D> → 尽力匹配（解析出 txid 或端点地址），命中则高亮对应边。
+ * 物证统一为 addr（后端已收口 LLM evidence 只引用地址节点）：
+ * addr:<A> → 该节点 + 所有相邻边 + 邻接节点（与画布点击物证节点同语义）。
+ * 历史快照可能残留 tx:/edge: 引用——不再解析，点击无高亮（可接受）。
  */
 export function resolveHighlightIds(
   highlightIds: Iterable<string>,
@@ -333,47 +333,11 @@ export function resolveHighlightIds(
   for (const id of highlightIds) {
     if (id.startsWith(ADDR_PREFIX) && nodeIds.has(id)) {
       out.add(id); // 地址节点
-      // 与画布点击物证节点同语义：高亮相邻边与邻接节点（完整链路）
       for (const e of flow.edges) {
         if (e.source === id || e.target === id) {
           out.add(e.id);
           out.add(e.source);
           out.add(e.target);
-        }
-      }
-    } else if (id.startsWith(TX_PREFIX)) {
-      const txid = txidOfNodeId(id);
-      if (txid) {
-        // terminalTransaction 节点 id 即 tx:<txid>：直接高亮该终止节点（issue #9）
-        const txNodeId = `tx:${txid}`;
-        if (nodeIds.has(txNodeId)) out.add(txNodeId);
-        for (const e of flow.edges) {
-          if (e.txid === txid) {
-            out.add(e.id);
-            out.add(e.source);
-            out.add(e.target);
-          }
-        }
-      }
-    } else if (id.startsWith("edge:")) {
-      // 从 canonical 边 id 反查：形如 edge:addr:A->tx:T 或 edge:tx:T->addr:B
-      const body = id.slice("edge:".length);
-      const txMatch = body.match(/tx:([^:>]+)/);
-      const addrMatch = body.match(/addr:([^>\]]+)/g);
-      if (txMatch) {
-        const txid = txMatch[1];
-        for (const e of flow.edges) {
-          if (e.txid === txid && nodeIds.has(e.source) && nodeIds.has(e.target)) {
-            out.add(e.id);
-          }
-        }
-      } else if (addrMatch) {
-        // 无 txid 的边（理论上 canonical 边必带 tx 端点）：按端点地址匹配
-        const addrs = new Set(addrMatch.map((a) => a));
-        for (const e of flow.edges) {
-          if (addrs.has(e.source) && addrs.has(e.target)) {
-            out.add(e.id);
-          }
         }
       }
     }

@@ -213,7 +213,7 @@ class OllamaClient(_HTTPClient):
             return resp.json()["message"]["content"] or ""
 
 
-_ID_PATTERN = re.compile(r"(?:addr|tx|edge):[^\s\"'`,\]]+")
+_NODE_ID_PATTERN = re.compile(r"node id=(addr:[^\s\"'`,\]]+)")
 # issue #26：只提取 CANDIDATE PATTERNS 的 pattern_name 行——此前 ^[-\w]+: 的宽
 # 正则会把 "seed: bc1q..." 等行也当候选名回显，新校验下这类引用会被拒绝
 _NAME_PATTERN = re.compile(r"^pattern_name:\s*(.+)$", re.MULTILINE)
@@ -222,8 +222,9 @@ _NAME_PATTERN = re.compile(r"^pattern_name:\s*(.+)$", re.MULTILINE)
 class MockLLMClient(LLMClient):
     """脚本化响应（LLM_PROVIDER=mock），场景由 scenario 参数/环境变量控制。
 
-    valid_* 场景从用户消息里提取真实存在的子图 ID 作为 evidence，
-    保证响应天然通过引用校验；invalid_* 场景用于触发重试/失败路径。
+    valid_* 场景从用户消息里提取真实存在的地址节点 ID 作为 evidence
+    （物证统一为 addr），保证响应天然通过引用校验；invalid_* 场景用于
+    触发重试/失败路径。
     """
 
     def __init__(self, scenario: str = "valid_high",
@@ -249,7 +250,9 @@ class MockLLMClient(LLMClient):
 
         user_text = next(
             (m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-        ids = _ID_PATTERN.findall(user_text)
+        # 物证统一为 addr：合法场景只引用地址节点 id（从 node id= 行精确提取，
+        # 避免把 addr:A->tx:T 这类边 id 当作节点引用）
+        ids = _NODE_ID_PATTERN.findall(user_text)
         names = _NAME_PATTERN.findall(user_text)
         matched = names[0].strip() if names else None
 
