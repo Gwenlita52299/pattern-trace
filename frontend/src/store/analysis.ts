@@ -81,13 +81,14 @@ export interface JudgmentPayload {
 const START_INTERVAL_MS = 2_000;
 const MAX_BACKOFF_MS = 5_000;
 
-// issue #40：阶段 → 文案；与后端 orchestration._report_stage 的 key 对齐
-export const STAGE_TEXT: Record<string, string> = {
-  building_subgraph: "正在构建子图（BFS）…",
-  retrieval_topk: "混合检索 Top-K…",
-  wl_rerank: "WL kernel 精排…",
-  llm_judging: "LLM 结构化判断中…",
-};
+// issue #40：阶段 → 文案；与后端 orchestration._report_stage 的 key 对齐。
+// 顺序即管线阶段，UI（进度条/结果呈现门控）共用
+export const ANALYSIS_STAGES = [
+  { key: "building_subgraph", label: "构建子图 BFS" },
+  { key: "retrieval_topk", label: "混合检索 Top-K" },
+  { key: "wl_rerank", label: "WL kernel 精排" },
+  { key: "llm_judging", label: "LLM 结构化判断" },
+] as const;
 const POLL_TIMEOUT_MS = Number(
   process.env.NEXT_PUBLIC_POLL_TIMEOUT_MS ?? 90_000,
 );
@@ -98,6 +99,9 @@ interface AnalysisState {
   status: AnalysisStatus;
   progressText: string;
   stage: string | null;
+  // 流势已显示完成的阶段数（AnalysisStages 逐格推进）；
+  // 页面据此门控结果呈现：完成后等进度条走满再显示子图/结论
+  stageProgress: number;
   error: string | null;
   highlightIds: Set<string>;
   selectedNodeId: string | null;
@@ -135,6 +139,7 @@ const initial = {
   status: "idle" as AnalysisStatus,
   progressText: "",
   stage: null as string | null,
+  stageProgress: 0,
   error: null as string | null,
   highlightIds: new Set<string>(),
   selectedNodeId: null as string | null,
@@ -167,6 +172,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
 
     const startedAt = Date.now();
     let interval = START_INTERVAL_MS;
+    let sawRunning = false; // 是否观察到过排队/进行中（刷新恢复已完成结果时为 false）
     set({ status: "processing", progressText: "AI 分析中…", error: null });
 
     while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
@@ -181,6 +187,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
             judgment: j,
             subgraph: j.subgraph ?? null,
             stage: null,
+            // 首轮轮询即 completed（页面刷新恢复）：跳过流势动画直接呈现
+            stageProgress: sawRunning
+              ? get().stageProgress
+              : ANALYSIS_STAGES.length,
           });
           return;
         }
@@ -193,12 +203,13 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
           });
           return;
         }
+        sawRunning = true;
         set({
           status: "processing",
           judgment: j,
           stage: j.stage ?? null,
-          progressText: STAGE_TEXT[j.stage ?? ""] ??
-            (j.status === "queued" ? "排队中，等待分析资源…" : "AI 分析中…"),
+          progressText:
+            j.status === "queued" ? "排队中，等待分析资源…" : "AI 分析中…",
         });
         interval = START_INTERVAL_MS; // FE-29：成功后退避计数器重置
       } catch (err) {
