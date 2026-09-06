@@ -11,20 +11,25 @@
 | 子图构建 | BFS 三队列 + 五类终止条件（unspent / 时间窗 / 深度≤3 / 规模裁剪 / early-stop）；live 模式带重试退避、熔断切备用端点与 Redis 缓存 |
 | 知识库 | 正/负样本入库 + pgvector 语义向量 + 结构指纹；负样本独立表隔离，不参与召回 |
 | 混合检索 | pgvector 加权召回 → 带属性 WL kernel 结构精排 → Top-K |
-| LLM 判断 | DeepSeek 云端主推，Ollama 本地/OpenAI 兼容可切换，mock 可离线演示；JSON 结构化输出；evidence 必须反向存在于子图快照（防幻觉校验，非法引用重试后落 failed） |
-| 可视化 | React Flow 分层画布、evidence 点击高亮、混币器红框双编码 |
+| LLM 判断 | DeepSeek 云端主推，Ollama 本地/OpenAI 兼容可切换，mock 可离线演示；JSON 结构化输出；evidence 统一引用地址节点（`addr:*`，防幻觉校验，非法引用重试后落 failed） |
+| 分析流程 | 四阶段进度条（BFS 构建 → 混合检索 Top-K → WL kernel 精排 → LLM 判断）：worker 经 Redis 上报阶段，前端流势逐格推进，失败标注在具体阶段 |
+| 可视化 | React Flow 分层画布、物证点击高亮完整链路（节点+相邻边+邻接节点）、节点折叠/展开、混币器琥珀框双编码 |
 | 业务闭环 | 案件 CRUD、地址关联、异步 PDF/HTML 报告（HMAC 签名下载）、审计日志 |
+| 认证体验 | 导航栏登录弹窗 + 用户中心下拉；整页刷新经 restoreSession 恢复会话；cases 页未登录内联提示、登录后自动刷新 |
 
 ## 架构
 
 ```
 frontend (Next.js + React Flow)      backend (FastAPI)            workers (arq)
-        │  REST /api/v1                  │                          │
+        │  /api/v1（Next rewrites 同源代理）│                          │
         ├──────────────────────────────► │  JWT access+refresh      │
         │                                ├──────────────────────────┤
         │                          PostgreSQL (pgvector)   Redis (queue/cache)
                                          DeepSeek API (或本地 Ollama)
 ```
+
+浏览器只与前端同源通信（`next.config.mjs` rewrites 转发到后端）：refresh cookie
+始终 same-site，登录态跨刷新可恢复；`API_PROXY_URL`（构建期注入）指定后端地址。
 
 - `backend/graph_builder/`：子图构建核心（BFS 三队列 + 五类终止条件，D3 全局 ID 规范 `addr:*` / `tx:*` / `edge:*`）
 - `backend/detection/`：CoinJoin / 跨链 OP_RETURN 运行时判定（模块化协议检测，取代旧跨链 CSV 标签库）
@@ -33,8 +38,8 @@ frontend (Next.js + React Flow)      backend (FastAPI)            workers (arq)
 - `backend/services/`：分析编排、报告生成、种子案例
 - `workers/worker.py`：arq 入口（analyze 默认进程内执行，扩缩容时切换队列形态）
 - `ingest/`：Lazarus 切图、正负样本生成、embedding 计算
-- `tests/unit/`：300+ 条测试用例的自动化收口（含契约测试 CT-01~03）
-- `tests/performance/`：PERF-01/02 nightly 性能基准
+- `tests/unit/`：后端 460+ 条测试用例的自动化收口（含契约测试 CT-01~03）；前端 vitest 18 例（address-flow 变换 / api 状态机 / 轮询门控）
+- `tests/performance/`：PERF-01/02 nightly 性能基准；压测脚本（locust + 灌库，spec 见 [docs/specs/stress-test-spec.md](docs/specs/stress-test-spec.md)）
 - `infra/verify_phase*.sh`：各阶段门禁脚本（`verify_phase6.sh` 为发布门禁）
 
 ## 快速开始（本地一键启动）
@@ -91,7 +96,8 @@ LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture uv run python tests/evaluation/run_e2e
 | `GRAPH_DATA_MODE` | `fixture`（内置演示图，离线）/ `live`（Esplora 公网） |
 | `ESPLORA_API_URL` | live 数据源，默认 `https://mempool.space/api`（自动切 Blockstream 备用） |
 | `DEMO_SEEDS` | 匿名免登录白名单地址 CSV；空则用 fixture 内置 seed |
-| `CORS_ORIGINS` | CORS 显式白名单 CSV；默认放行 `localhost:3000`，生产注入正式域名 |
+| `CORS_ORIGINS` | CORS 显式白名单 CSV；默认放行 `localhost:3000`（同源代理形态下仅直连后端时需要），生产注入正式域名 |
+| `API_PROXY_URL` | 前端构建 arg：rewrites 转发目的地（compose 内 `http://backend:8000`；注意 rewrites 在 `next build` 时烘焙，须构建期注入） |
 | `COOKIE_SECURE` | 生产置 `true`（Cookie 带 Secure + SameSite=None，支持前后端分域） |
 
 ## 测试与发布门禁
@@ -103,8 +109,9 @@ python -m scripts.gen_api_types   # OpenAPI schema 变更后同步前端契约
 uv run python tests/performance/perf_phase6.py PERF-01    # 报告容量基准
 ```
 
-CI（`.github/workflows/ci.yml`）：PR 触发三个 job —— 后端 lint/test/codegen 守护、
-前端 type-check、compose E2E 冒烟；`schedule` nightly 追加 PERF 性能档。
+CI（`.github/workflows/ci.yml`，Node 24）：PR 触发三个 job —— 后端 lint/test/codegen 守护、
+前端 lint + type-check + vitest + build、compose E2E 冒烟（含 `:3000` 同源代理探活）；
+`schedule` nightly 追加 PERF 性能档。
 CI 只做验证门禁，不负责发布；交付形态是 docker compose 私有化部署（见下文）。
 
 ## 部署
