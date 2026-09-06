@@ -1,7 +1,7 @@
 "use client";
 // 首页（frontend-spec §2 /）：地址查询输入 + 演示地址 chips。
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { useAnalysisStore } from '@/store/analysis';
@@ -10,6 +10,7 @@ export default function Home() {
   const router = useRouter();
   const startAnalysis = useAnalysisStore((s) => s.startAnalysis);
   const [address, setAddress] = useState('');
+  const addressRef = useRef<HTMLInputElement>(null);
   const [hops, setHops] = useState(3);
   const [demoAddresses, setDemoAddresses] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -68,6 +69,7 @@ export default function Home() {
         <div className="flex gap-2">
           <input
             id="address"
+            ref={addressRef}
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             placeholder="bc1q…"
@@ -98,10 +100,14 @@ export default function Home() {
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <span className="text-xs text-pt-faint">演示地址：</span>
             {demoAddresses.map((a) => (
+              // 仅填充输入框（issue #41）：用户查看/修改后手动触发分析
               <button
                 key={a}
                 type="button"
-                onClick={() => void submit(a)}
+                onClick={() => {
+                  setAddress(a);
+                  addressRef.current?.focus();
+                }}
                 className="max-w-[280px] truncate rounded-full border border-pt-line bg-pt-panel px-3 py-1 font-mono text-[10px] text-pt-muted hover:border-pt-amber hover:text-pt-amber-hi"
               >
                 {a}
