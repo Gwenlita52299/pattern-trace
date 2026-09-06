@@ -64,8 +64,11 @@ export default function AnalyzePage() {
   }
 
   return (
-    <main className="mx-auto flex max-w-7xl gap-4 px-4 py-6">
-      <section className="relative h-[calc(100vh-140px)] flex-1 overflow-hidden rounded-xl border border-pt-line bg-[#0c0f13]">
+    <main className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6">
+      {/* 分阶段进度条（issue #40）：横向，横跨子图与右侧栏 */}
+      <AnalysisStages />
+      <div className="flex gap-4">
+      <section className="relative h-[calc(100vh-190px)] flex-1 overflow-hidden rounded-xl border border-pt-line bg-[#0c0f13]">
         {subgraph ? (
           <ErrorBoundary>
             <div className="absolute left-3 top-3 z-10 flex items-center gap-2 rounded-lg border border-pt-line bg-pt-panel/90 px-3 py-1.5 font-mono text-xs shadow-sm backdrop-blur">
@@ -132,7 +135,6 @@ export default function AnalyzePage() {
       </section>
 
       <aside className="w-96 shrink-0 space-y-4">
-        <AnalysisStages />
         <VerdictCard onRetry={() => void retry()} />
         {judgment?.address && (
           <div className="rounded-xl border border-pt-line bg-pt-panel p-4 font-mono text-xs text-pt-muted">
@@ -147,6 +149,7 @@ export default function AnalyzePage() {
           重置本页状态
         </button>
       </aside>
+      </div>
     </main>
   );
 }
