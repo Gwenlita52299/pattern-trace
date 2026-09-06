@@ -143,13 +143,20 @@ class RefreshTokenStore:
     """Refresh rotation + reuse detection — spec §3 auth/refresh。
 
     Redis 可达则状态跨进程共享且带 TTL（多实例部署的正确形态）；
-    不可达时降级进程内（开发/测试形态，行为与旧版一致）。
+    不可达时降级进程内（开发/测试形态，行为与旧版一致）。降级判定不只
+    在构造期：运行中掉线同样降级（对齐 task_queue 的冷却模式），冷却结束
+    自动重试 Redis。降级窗口内 rotation 状态分裂为 Redis/内存两段——
+    多实例部署以 Redis 为强制依赖（infra-spec），单实例形态可接受此取舍。
     """
+
+    # 运行中掉线的重试冷却：期间直接走 memory，避免每请求阻塞在超时上
+    _REDIS_COOLDOWN = 5.0
 
     def __init__(self, redis_url: str = "", ttl_seconds: int = 7 * 86400) -> None:
         self._ttl = ttl_seconds
         self._memory = _MemoryRefreshStore()
         self._redis = None
+        self._down_until = 0.0  # monotonic 时间戳：冷却期内跳过 Redis 直接降级
         if redis_url:
             try:
                 import redis
@@ -161,40 +168,60 @@ class RefreshTokenStore:
             except Exception:  # noqa: BLE001 — 无 Redis 是合法部署形态
                 self._redis = None
 
+    def _redis_ok(self) -> bool:
+        return self._redis is not None and time.monotonic() >= self._down_until
+
+    def _mark_redis_down(self, exc: Exception) -> None:
+        self._down_until = time.monotonic() + self._REDIS_COOLDOWN
+        print(f"[auth] redis op failed ({exc.__class__.__name__}); "
+              "refresh store degraded to in-process state")
+
     def _key(self, family_id: str) -> str:
         return f"rt:{family_id}"
 
     def issue(self, family_id: str, jti: str) -> None:
-        if self._redis:
+        if self._redis_ok():
             k = self._key(family_id)
-            pipe = self._redis.pipeline()
-            pipe.hset(k, jti, "active")
-            pipe.expire(k, self._ttl)
-            pipe.execute()
-            return
+            try:
+                pipe = self._redis.pipeline()
+                pipe.hset(k, jti, "active")
+                pipe.expire(k, self._ttl)
+                pipe.execute()
+                return
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         self._memory.issue(family_id, jti)
 
     def rotate(self, family_id: str, old_jti: str, new_jti: str) -> bool:
-        if self._redis:
-            result = self._redis.eval(_ROTATE_LUA, 1, self._key(family_id),
-                                      old_jti, new_jti, self._ttl)
-            return bool(result)
+        if self._redis_ok():
+            try:
+                result = self._redis.eval(_ROTATE_LUA, 1, self._key(family_id),
+                                          old_jti, new_jti, self._ttl)
+                return bool(result)
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         return self._memory.rotate(family_id, old_jti, new_jti)
 
     def is_active(self, family_id: str, jti: str) -> bool:
-        if self._redis:
+        if self._redis_ok():
             k = self._key(family_id)
-            if self._redis.exists(f"{k}:dead"):
-                return False
-            return self._redis.hget(k, jti) == b"active"
+            try:
+                if self._redis.exists(f"{k}:dead"):
+                    return False
+                return self._redis.hget(k, jti) == b"active"
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         return self._memory.is_active(family_id, jti)
 
     def revoke_family(self, family_id: str) -> None:
-        if self._redis:
+        if self._redis_ok():
             k = self._key(family_id)
-            pipe = self._redis.pipeline()
-            pipe.set(f"{k}:dead", "1", ex=self._ttl)   # 已发 token 一律拒
-            pipe.delete(k)
-            pipe.execute()
-            return
+            try:
+                pipe = self._redis.pipeline()
+                pipe.set(f"{k}:dead", "1", ex=self._ttl)   # 已发 token 一律拒
+                pipe.delete(k)
+                pipe.execute()
+                return
+            except Exception as exc:  # noqa: BLE001 — 运行中掉线即降级
+                self._mark_redis_down(exc)
         self._memory.revoke_family(family_id)
