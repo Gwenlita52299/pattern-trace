@@ -1,7 +1,7 @@
 "use client";
 // 公共登录表单（issue #42）：/login 页与导航栏弹窗复用。
 // 成功后 access token 入内存 store，另设 pt_auth 标记 cookie 供
-// middleware 做登录信号（验签由后端 401 兜底）。
+// 挂载恢复（restoreSession）判断登录存在性（验签由后端 401 兜底）。
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -32,12 +32,12 @@ export default function LoginForm({ redirectTo, onSuccess }: LoginFormProps) {
         user: { email: string; role: string };
       }>('/auth/login', { method: 'POST', body: { email, password } });
       useAuthStore.getState().setSession(resp.access_token, resp.user.email);
-      // middleware 的登录存在性信号（生产由后端 Set-Cookie refresh 承担）。
+      // 登录存在性标记 cookie（restoreSession 的恢复信号；
+      // 生产由后端 Set-Cookie refresh 承担）。
       // TTL 对齐后端 refresh token 的 7 天：若短于 refresh 生命周期，
       // 第 2 天起导航栏就会显示未登录，而会话实际仍可 refresh 续命
       document.cookie =
-        'pt_auth=1; Path=/; SameSite=Lax; max-age=604800';
-      // 非敏感展示信息（issue #43）：供整页刷新后回填用户中心，
+        'pt_auth=1; Path=/; SameSite=Lax; max-age=604800';      // 非敏感展示信息（issue #43）：供整页刷新后回填用户中心，
       // access token 本体绝不落 cookie（frontend-spec §3）
       document.cookie =
         `pt_email=${encodeURIComponent(resp.user.email)}; Path=/; SameSite=Lax; max-age=604800`;
@@ -46,8 +46,6 @@ export default function LoginForm({ redirectTo, onSuccess }: LoginFormProps) {
         // refresh——而 refresh cookie 是 SameSite=lax，前端经 127.0.0.1 访问时
         // 对 localhost:8000 是 cross-site，cookie 不被携带，登录后立即被弹回。
         // 软导航保留内存 token，GET /cases 直接带 Bearer 成功。
-        // （Nav 对 /cases 的 prefetch 已关，见 layout.tsx，Router Cache 不会被
-        // middleware 307 污染，push 能真实到达 /cases。）
         router.push(redirectTo);
       }
       onSuccess?.();

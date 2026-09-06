@@ -78,10 +78,8 @@ export default function UserMenu() {
         {menuOpen && (
           <div role="menu" className="absolute right-0 top-10 z-50 w-56 rounded-lg border border-pt-line bg-pt-panel p-1 shadow-xl">
             <p className="truncate px-3 py-2 font-mono text-xs text-pt-muted">{email}</p>
-            {/* prefetch={false}：与 layout.tsx 同因，避免 middleware 307 产物污染 Router Cache */}
             <Link
               href="/cases"
-              prefetch={false}
               onClick={() => setMenuOpen(false)}
               className="block rounded-md px-3 py-2 text-sm text-pt-ink hover:bg-pt-panel-2"
             >

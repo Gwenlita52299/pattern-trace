@@ -26,6 +26,9 @@ interface RequestOptions {
   signal?: AbortSignal; // 调用方取消（轮询/组件卸载）
   /** 默认 GET 视为幂等：502/503/504 指数退避重试最多 2 次 */
   idempotent?: boolean;
+  /** 401 refresh 失败后的处理：redirect（默认）跳 /login 兜底；
+   * throw 上抛 ApiError(401)，由页面内联渲染「请先登录」（issue #46 cases 页） */
+  on401?: "redirect" | "throw";
   /** 401 后已尝试过 refresh 的防循环标记（内部使用） */
   _authRetried?: boolean;
 }
@@ -130,8 +133,10 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
         if (await refreshAccessToken()) {
           return api<T>(path, { ...opts, _authRetried: true });
         }
-        useAuthStore.getState().clear(); // FE-11：清空内存态并回登录页
-        window.location.href = "/login";
+        useAuthStore.getState().clear(); // FE-11：清空内存态
+        if ((opts.on401 ?? "redirect") === "redirect") {
+          window.location.href = "/login";
+        }
         throw new ApiError(401, "session expired");
       }
 

@@ -17,7 +17,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   setSession: (token, email) =>
     set({ accessToken: token, email }),
   setEmail: (email) => set({ email }),
-  // 刷新内存态时同步清除客户端标记 cookie（middleware 的登录信号）
+  // 刷新内存态时同步清除客户端标记 cookie（restoreSession 的登录信号）
   clear: () => {
     document.cookie = "pt_auth=; Max-Age=0; Path=/";
     // issue #43：展示态 cookie 同步清除，退出后不残留假登录信号
