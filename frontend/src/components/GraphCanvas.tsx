@@ -344,6 +344,7 @@ function buildEdges(
   flow: AddressFlow,
   maxLayer: number | null,
   collapsed: Set<string>,
+  highlightIds: Set<string>,
 ): RFEdge[] {
   const hidden = hiddenSet(flow, collapsed);
   const visibleIds = new Set(
@@ -364,20 +365,23 @@ function buildEdges(
       if (e.is_stopped_expansion) flags.push("stopped"); // FE-14
       const amountLabel = flowAmountLabel(e);
       const label = [amountLabel, flags.join("·")].filter(Boolean).join(" · ");
+      // 高亮边（FE-26 / issue #39）：琥珀证据色 + 加粗；虚线（stopped）保留
+      const hl = highlightIds.has(e.id);
+      const stroke = hl ? "#f0b429" : e.is_stopped_expansion ? "#3a4250" : e.is_remixer ? "#f0b429" : "#2a3340";
       return {
         id: e.id,
         source: e.source,
         target: e.target,
         animated: false,
         label: label || undefined,
-        labelStyle: { fontSize: 9, fill: "#8b93a1" },
+        labelStyle: { fontSize: 9, fill: hl ? "#ffd166" : "#8b93a1" },
         labelBgStyle: { fill: "#141920" },
-        style: e.is_stopped_expansion
-          ? { strokeDasharray: "6 4", stroke: "#3a4250" }
-          : e.is_remixer
-            ? { stroke: "#f0b429" } // 调性规范：回混边=琥珀证据色
-            : { stroke: "#2a3340" },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: e.is_stopped_expansion ? "#3a4250" : e.is_remixer ? "#f0b429" : "#2a3340" },
+        style: {
+          ...(e.is_stopped_expansion ? { strokeDasharray: "6 4" } : {}),
+          stroke,
+          ...(hl ? { strokeWidth: 2 } : {}),
+        },
+        markerEnd: { type: MarkerType.ArrowClosed, width: 12, height: 12, color: stroke },
       } satisfies RFEdge;
     });
 
@@ -387,6 +391,8 @@ function buildEdges(
 export interface GraphCanvasProps {
   subgraph: { nodes: GraphNode[]; edges: GraphEdge[] };
   highlightIds: Set<string>;
+  /** 物证节点集合（canonical id，issue #39）：点击后高亮关联边与邻接节点 */
+  evidenceIds?: Set<string>;
   maxLayer?: number | null; // FE-17 跳数过滤；null=全部
   onNodeClick?: (node: GraphNode) => void;
 }
@@ -394,12 +400,15 @@ export interface GraphCanvasProps {
 export default function GraphCanvas({
   subgraph,
   highlightIds,
+  evidenceIds,
   maxLayer = null,
   onNodeClick,
 }: GraphCanvasProps) {
   // 已收回（折叠）的下游节点集合，及其稳定位置缓存（供拖动 & 折叠不跳动）
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [posMap, setPosMap] = useState<Record<string, { x: number; y: number }>>({});
+  // issue #39：点击物证节点产生的高亮（flow 空间 id：节点 + 关联边 + 邻接节点）
+  const [evidenceFocus, setEvidenceFocus] = useState<{ id: string; ids: Set<string> } | null>(null);
 
   const handleSelect = useCallback(
     (id: string) => {
@@ -445,15 +454,49 @@ export default function GraphCanvas({
 
   // 展示变换：canonical 子图 → 地址节点 + 交易边（含入/出边金额）。
   const flow = useMemo(() => toAddressFlow(subgraph), [subgraph]);
+
+  // issue #39：物证节点点击 → 高亮关联路径；再次点击取消
+  const handleNodeClick = useCallback(
+    (_evt: React.MouseEvent, node: RFNode) => {
+      handleSelect(node.id);
+      if (!evidenceIds?.has(node.id)) return;
+      setEvidenceFocus((prev) => {
+        if (prev?.id === node.id) return null;
+        // 关联路径 = 该节点 + 所有相邻边 + 边的另一端节点
+        const ids = new Set<string>([node.id]);
+        for (const e of flow.edges) {
+          if (e.source === node.id || e.target === node.id) {
+            ids.add(e.id);
+            ids.add(e.source);
+            ids.add(e.target);
+          }
+        }
+        return { id: node.id, ids };
+      });
+    },
+    [handleSelect, evidenceIds, flow],
+  );
+
   // 节点跟随 posMap（拖动每帧更新）；边与 posMap 解耦（见 buildEdges 注释），
   // 两者依赖不同，拖动不再触发边重建/重挂载。
   const { rfNodes, layoutPos } = useMemo(
     () => buildFlow(flow, maxLayer ?? null, collapsed, posMap, dimMapRef.current, handleToggle),
     [flow, maxLayer, collapsed, posMap, handleToggle],
   );
+  // 证据高亮：canonical id（addr:/tx:/edge:）→ 本视图节点/边 id
+  const resolvedHighlight = useMemo(
+    () => resolveHighlightIds(highlightIds, flow),
+    [highlightIds, flow],
+  );
+  // issue #39：物证节点点击高亮与 VerdictCard 证据高亮取并集
+  const displayHighlightIds = useMemo(() => {
+    if (!evidenceFocus) return resolvedHighlight;
+    return new Set([...resolvedHighlight, ...evidenceFocus.ids]);
+  }, [resolvedHighlight, evidenceFocus]);
+
   const rfEdges = useMemo(
-    () => buildEdges(flow, maxLayer ?? null, collapsed),
-    [flow, maxLayer, collapsed],
+    () => buildEdges(flow, maxLayer ?? null, collapsed, displayHighlightIds),
+    [flow, maxLayer, collapsed, displayHighlightIds],
   );
 
   // 播种稳定位置：把每次首次出现的节点布局位置记入 posMap，折叠/过滤不跳动；
@@ -471,12 +514,6 @@ export default function GraphCanvas({
     });
   }, [layoutPos]);
 
-  // 证据高亮：canonical id（addr:/tx:/edge:）→ 本视图节点/边 id
-  const displayHighlightIds = useMemo(
-    () => resolveHighlightIds(highlightIds, flow),
-    [highlightIds, flow],
-  );
-
   return (
     <HighlightContext.Provider value={displayHighlightIds}>
       <div style={{ width: "100%", height: "100%" }} data-testid="graph-canvas">
@@ -485,7 +522,8 @@ export default function GraphCanvas({
           edges={rfEdges}
           onNodesChange={handleNodesChange}
           nodeTypes={nodeTypes}
-          onNodeClick={(_evt, node) => handleSelect(node.id)}
+          onNodeClick={handleNodeClick}
+          onPaneClick={() => setEvidenceFocus(null)} // 点击空白取消物证高亮（issue #39）
           // 注意：不要开 onlyRenderVisibleElements —— fitView 完成测量前视口判定
           // 会把所有边裁剪掉（实测 17 节点 0 边），≤200 节点规模无性能压力
           nodesConnectable={false}

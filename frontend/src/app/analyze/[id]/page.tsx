@@ -4,7 +4,7 @@
 // failed 态重试按钮以相同地址重新 POST 创建新 judgment（FE-03）；
 // 组件卸载取消轮询（FE-30）。
 import { useParams, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import ErrorBoundary from '@/components/ErrorBoundary';
 import AnalysisStages from '@/components/AnalysisStages';
@@ -28,6 +28,11 @@ export default function AnalyzePage() {
   const startAnalysis = useAnalysisStore((s) => s.startAnalysis);
 
   const [maxLayer, setMaxLayer] = useState<number | null>(null);
+  // issue #39：物证节点集合（canonical evidence id），供画布点击高亮关联路径
+  const evidenceIds = useMemo(
+    () => new Set(judgment?.evidence ?? []),
+    [judgment],
+  );
   const selectedNode: GraphNode | undefined = subgraph?.nodes.find(
     (n) => n.id === selectedNodeId,
   );
@@ -81,6 +86,7 @@ export default function AnalyzePage() {
             <GraphCanvas
               subgraph={subgraph}
               highlightIds={highlightIds}
+              evidenceIds={evidenceIds}
               maxLayer={maxLayer}
               onNodeClick={(n) => useAnalysisStore.getState().selectNode(n.id)}
             />
