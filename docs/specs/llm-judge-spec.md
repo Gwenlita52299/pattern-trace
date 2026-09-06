@@ -38,9 +38,9 @@ def get_llm_client() -> LLMClient:
 环境变量：
 | 变量 | 示例值 |
 |---|---|
-| LLM_PROVIDER | ollama |
-| LLM_MODEL | qwen3:30b-a3b (Q4_K_M) |
-| LLM_BASE_URL | http://localhost:11434 |
+| LLM_PROVIDER | deepseek（默认）/ openai_compatible（llama.cpp 本地推理，issue #63） |
+| LLM_MODEL | deepseek-chat；本地为 llama-server --alias（qwen3.8-27b，UD-Q4_K_M） |
+| LLM_BASE_URL | https://api.deepseek.com；本地为 http://llamacpp:8080/v1 |
 | LLM_API_KEY | sk-... |
 
 ## 3. System Prompt

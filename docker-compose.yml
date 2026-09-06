@@ -23,16 +23,28 @@ services:
       timeout: 3s
       retries: 10
 
-  ollama:
-    image: ollama/ollama:latest
-    ports: ["11434:11434"]
+  # issue #63：本地推理可选项。生产不拉起（profile 门控），默认走 deepseek。
+  # 首启从 HF 下载 ~16GB 模型；本地已缓存（~/.cache/huggingface）可 bind-mount 复用
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["local-llm"]
+    # 判决缓存 key 含 model 名：--alias 必须与 backend/worker 的 LLM_MODEL 一致
+    command: >
+      -hf unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M
+      --alias qwen3.8-27b --jinja
+      -c 8192 -ngl 99
+      --temp 1.0 --top-p 0.95 --top-k 20
+      --host 0.0.0.0 --port 8080
+    ports: ["8080:8080"]
     volumes:
-      - ollama_models:/root/.ollama
+      - llamacpp_models:/root/.cache/llama.cpp
     healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 30
+      # 模型加载入内存需数分钟（16GB），先给足宽限
+      start_period: 300s
 
   backend:
     build:
@@ -47,11 +59,11 @@ services:
     environment:
       - DATABASE_URL=postgresql://pt:pt@db:5432/patterntrace
       - REDIS_URL=redis://redis:6379/0
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
-      - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
       # LLM_API_KEY 由 Settings 声明读取（环境变量优先于 .env），必须在此透传进容器
       - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
@@ -86,10 +98,10 @@ services:
       - ARQ_QUEUE_LLM=q_llm
       # worker 与 backend 的判决缓存 key 含 model 名，两侧必须一致；
       # LLM 配置与 backend 保持同一组变量，保证两种执行形态可互换
-      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
-      - LLM_MODEL=${LLM_MODEL:-qwen3:30b-a3b}
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
       - LLM_API_KEY=${LLM_API_KEY:-}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
       - REPORTS_DIR=/app/output/reports
@@ -122,5 +134,5 @@ services:
 
 volumes:
   pgdata:
-  ollama_models:
+  llamacpp_models:
   report_files:

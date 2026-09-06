@@ -57,10 +57,12 @@ services:
       interval: 5s
       retries: 5
 
-  ollama:
-    image: ollama/ollama:latest
-    ports: ["11434:11434"]
-    volumes: [ollama_models:/root/.ollama]
+  # issue #63：本地推理可选容器，生产不拉起；默认 LLM 走 deepseek 云端
+  llamacpp:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["local-llm"]
+    ports: ["8080:8080"]
+    volumes: [llamacpp_models:/root/.cache/llama.cpp]
 ```
 
 ## 2. 生产部署

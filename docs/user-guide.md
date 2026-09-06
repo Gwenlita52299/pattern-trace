@@ -41,7 +41,7 @@ docker compose up --build -d
 |---|---|---|
 | db | 5432 | PostgreSQL 16 + pgvector（判决 / 案件 / 模式知识库） |
 | redis | 6379 | 任务队列 · 判决缓存 · refresh rotation 状态 |
-| ollama | — | 本地 LLM 推理（默认无模型，见 §四） |
+| llamacpp | 8080 | 本地 LLM 推理（可选 profile `local-llm`，默认不拉起，见 §四） |
 | backend | 8000 | FastAPI REST API |
 | worker | — | arq 工作进程（与 backend 同管线，扩缩容备用形态） |
 | frontend | 3000 | Next.js Web 界面 |
@@ -69,7 +69,8 @@ curl -s localhost:8000/readyz        # 就绪探针（含 db/redis 依赖）
 ## 二、第一个分析（离线，约 30 秒）
 
 默认配置 `GRAPH_DATA_MODE=fixture`（内置演示子图，不出公网）。若 `LLM_PROVIDER`
-还是默认的 `ollama` 而 ollama 里没有模型，判决会失败——离线体验请先把 `.env` 改成
+还是默认的 `deepseek` 而 `.env` 里没有 `LLM_API_KEY`，判决会失败——离线体验请先把
+`.env` 改成
 `LLM_PROVIDER=mock` 并 `docker compose up -d backend worker` 重建两容器。
 
 **方式 A：网页操作**
@@ -110,15 +111,18 @@ docker compose exec backend python -m backend.services.seed_cases
 
 ## 四、切换到真实推理与公网数据
 
-### 本地 LLM（ollama）
+### 本地 LLM（llama.cpp + Qwen3.8-27B）
 
-ollama 容器默认是空的，先拉模型再重启两个用到它的服务：
+本地推理走 llama.cpp 可选 profile（issue #63）。**首启会从 HuggingFace 下载
+~16GB 模型**（unsloth UD-Q4_K_M 量化），请预留磁盘与时间；且 Docker Desktop
+VM 内存需 ≥20GB：
 
 ```bash
-docker exec pattern_trace-ollama-1 ollama pull qwen3:8b   # 小机型推荐；大显存可上 qwen3:30b-a3b
+docker compose --profile local-llm up -d    # 拉起 llamacpp（首启下载模型）
 # .env 中设置：
-#   LLM_PROVIDER=ollama
-#   LLM_MODEL=qwen3:8b
+#   LLM_PROVIDER=openai_compatible
+#   LLM_MODEL=qwen3.8-27b                    # 必须与 llama-server --alias 一致
+#   LLM_BASE_URL=http://llamacpp:8080/v1
 docker compose up -d backend worker
 ```
 
@@ -170,8 +174,8 @@ curl -s -H "Authorization: Bearer $TOKEN" $BASE/judgments/$JID    # 轮询至 co
 |---|---|---|
 | `JWT_SECRET` | 长随机串 | **必填** |
 | `BOOTSTRAP_ADMIN_*` | 邮箱 + 密码 | 首启建 admin；空则无账号 |
-| `LLM_PROVIDER` | `mock` / `ollama` / OpenAI 兼容 | mock 全离线秒出 |
-| `LLM_MODEL` | `qwen3:8b` 等 | 两侧服务必须一致 |
+| `LLM_PROVIDER` | `deepseek`（默认，需 key）/ `openai_compatible`（llama.cpp）/ `mock` | mock 全离线秒出 |
+| `LLM_MODEL` | 默认 `deepseek-chat`；llama.cpp 为 `qwen3.8-27b` | 两侧服务必须一致 |
 | `GRAPH_DATA_MODE` | `fixture` / `live` | fixture 内置演示图 |
 | `DEMO_SEEDS` | 地址 CSV | 匿名白名单；空则用内置 |
 | `CORS_ORIGINS` | `https://your.app` | 生产填正式前端域名 CSV |
@@ -199,7 +203,7 @@ curl -s -H "Authorization: Bearer $TOKEN" $BASE/judgments/$JID    # 轮询至 co
 ## 八、停止与清理
 
 ```bash
-docker compose down          # 停止并移除容器；数据卷保留（pgdata / ollama_models）
+docker compose down          # 停止并移除容器；数据卷保留（pgdata / llamacpp_models）
 docker compose down -v       # 连数据一起删除——判决、案件、已拉取的模型权重全部丢失，不可恢复
 ```
 

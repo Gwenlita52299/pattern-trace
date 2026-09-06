@@ -39,9 +39,11 @@ class Settings(BaseSettings):
         return v
     access_token_expire_minutes: int = 15
     refresh_token_days: int = 7
-    llm_provider: str = "ollama"
-    llm_model: str = "qwen3:30b-a3b"
-    llm_base_url: str = "http://localhost:11434"
+    # issue #63：生产默认 deepseek（fail-fast：无 LLM_API_KEY 首次调用即明确报错）；
+    # 本地推理走 llama.cpp（compose --profile local-llm），经 openai_compatible 接入
+    llm_provider: str = "deepseek"
+    llm_model: str = "deepseek-chat"
+    llm_base_url: str = "https://api.deepseek.com"
     # LLM_API_KEY：云端 provider（DeepSeek/OpenAI 等）的密钥。
     # pydantic-settings 优先级是环境变量 > .env 文件——本地 .env 与
     # docker compose 透传的环境变量两条路都能到这里，providers 不再各自读 os.environ
