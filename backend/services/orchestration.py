@@ -64,6 +64,21 @@ def _record_event(session, judgment_id: str, from_status: str | None,
                               from_status=from_status, to_status=to_status))
 
 
+def _report_stage(judgment_id: str, stage: str, settings) -> None:
+    """issue #40：分析阶段进度上报 — worker 写 Redis，API 轮询读取。
+
+    best-effort：无 Redis / 写入失败不影响分析管线；TTL 1h 防残留。
+    """
+    try:
+        import redis
+
+        client = redis.Redis.from_url(settings.redis_url,
+                                      socket_connect_timeout=1)
+        client.set(f"judgment:stage:{judgment_id}", stage, ex=3600)
+    except Exception:  # noqa: BLE001 — 进度上报绝不阻塞主流程
+        pass
+
+
 def _provider_error_code(exc: BaseException) -> str | None:
     """把 provider 层异常映射为明确 error_code；非 provider 异常返回 None。"""
     try:
@@ -209,6 +224,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     # _isolated_sync 隔离到 anyio 线程池，不阻塞事件循环；fixture 模式保持同步
     # （构建 ~0.4ms，可忽略阻塞），避免引入线程切换破坏既有测试/CI。
     live = settings.graph_data_mode == "live"
+    # issue #40：阶段 1/4 — 构建子图（BFS）
+    _report_stage(row.id, "building_subgraph", settings)
     seed_time = await _isolated_sync(
         live, _sync_seed_block_time, provider, row.address)
     # issue #7 data_as_of：本次分析使用的链上数据时间点（种子/发起区块时间）；
@@ -229,10 +246,14 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     canon = subgraphresult_to_canonical(subgraph)
 
     retriever = Retriever(session, settings)
-    retrieval = retriever.retrieve(canon)
+    # issue #40：阶段 2/4 混合检索 Top-K、3/4 WL kernel 精排由 retriever 内部回调上报
+    retrieval = retriever.retrieve(
+        canon, notify=lambda stage: _report_stage(row.id, stage, settings))
 
     judge = LLMJudge(client=get_llm_client(settings),
                      cache=_judgment_cache(settings))
+    # issue #40：阶段 4/4 — LLM 结构化判断（耗时最长，单独上报）
+    _report_stage(row.id, "llm_judging", settings)
     verdict = None
     provider_code: str | None = None
     # issue #8：图不完整时把数据质量事实传给 LLM（谨慎判断、说明局限）
