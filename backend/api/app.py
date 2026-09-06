@@ -543,10 +543,12 @@ def create_app() -> FastAPI:
         from fastapi.responses import JSONResponse
 
         # D4：轮换后的新 refresh token 同样只经 HttpOnly Cookie 下发
+        # email：issue #43，前端刷新后凭它恢复导航栏用户中心展示态
         resp = JSONResponse(content={
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": access_ttl,
+            "email": email,
         })
         resp.set_cookie(
             "refresh_token", new_refresh_token, max_age=refresh_ttl,

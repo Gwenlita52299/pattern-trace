@@ -32,7 +32,7 @@ interface RequestOptions {
 
 const pendingByPath = new Map<string, AbortController>();
 
-async function refreshAccessToken(): Promise<boolean> {
+async function doRefresh(): Promise<boolean> {
   try {
     const resp = await fetch(`${API_BASE}/auth/refresh`, {
       method: "POST",
@@ -41,12 +41,46 @@ async function refreshAccessToken(): Promise<boolean> {
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });
     if (!resp.ok) return false;
-    const data = (await resp.json()) as { access_token?: string };
+    const data = (await resp.json()) as { access_token?: string; email?: string };
     if (!data.access_token) return false;
-    useAuthStore.getState().setSession(data.access_token, useAuthStore.getState().email ?? "");
+    const current = useAuthStore.getState();
+    // email：issue #43，后端 refresh 响应携带，刷新后据此恢复用户中心展示
+    useAuthStore.getState().setSession(
+      data.access_token, data.email ?? current.email ?? "");
     return true;
   } catch {
     return false;
+  }
+}
+
+// 单飞（issue #43）：挂载恢复与 401 被动刷新可能并发；refresh 轮换一次性，
+// 并发的第二个请求会撞 reuse detection 撤销整个 token family，强制全员重新登录
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshAccessToken(): Promise<boolean> {
+  refreshInFlight ??= doRefresh().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
+}
+
+// issue #43：整页刷新后内存 access token 清空。检测 pt_auth 标记存在时，
+// 先用非敏感 pt_email cookie 即时回填用户中心展示态，再主动 refresh 拿回
+// access token——避免刷新后首个 API 请求被动走 401→refresh→重放。
+export async function restoreSession(): Promise<void> {
+  if (useAuthStore.getState().accessToken) return;
+  const cookies = document.cookie.split("; ").reduce<Record<string, string>>(
+    (acc, kv) => {
+      const i = kv.indexOf("=");
+      if (i > 0) acc[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+      return acc;
+    }, {});
+  if (!cookies.pt_auth) return;
+  if (cookies.pt_email) useAuthStore.getState().setEmail(cookies.pt_email);
+  const ok = await refreshAccessToken();
+  if (!ok) {
+    // refresh cookie 已失效：清掉全部标记 cookie，导航栏不留假登录态
+    useAuthStore.getState().clear();
   }
 }
 

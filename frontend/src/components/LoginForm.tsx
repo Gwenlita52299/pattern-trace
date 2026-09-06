@@ -32,8 +32,15 @@ export default function LoginForm({ redirectTo, onSuccess }: LoginFormProps) {
         user: { email: string; role: string };
       }>('/auth/login', { method: 'POST', body: { email, password } });
       useAuthStore.getState().setSession(resp.access_token, resp.user.email);
-      // middleware 的登录存在性信号（生产由后端 Set-Cookie refresh 承担）
-      document.cookie = 'pt_auth=1; Path=/; SameSite=Lax; max-age=86400';
+      // middleware 的登录存在性信号（生产由后端 Set-Cookie refresh 承担）。
+      // TTL 对齐后端 refresh token 的 7 天：若短于 refresh 生命周期，
+      // 第 2 天起导航栏就会显示未登录，而会话实际仍可 refresh 续命
+      document.cookie =
+        'pt_auth=1; Path=/; SameSite=Lax; max-age=604800';
+      // 非敏感展示信息（issue #43）：供整页刷新后回填用户中心，
+      // access token 本体绝不落 cookie（frontend-spec §3）
+      document.cookie =
+        `pt_email=${encodeURIComponent(resp.user.email)}; Path=/; SameSite=Lax; max-age=604800`;
       if (redirectTo) {
         // 必须软导航：硬导航整页刷新会清空内存 token，此后每个请求都要走
         // refresh——而 refresh cookie 是 SameSite=lax，前端经 127.0.0.1 访问时
