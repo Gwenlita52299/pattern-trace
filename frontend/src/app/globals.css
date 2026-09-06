@@ -10,6 +10,13 @@
   box-shadow: 0 0 0 3px rgba(240, 180, 41, 0.35), 0 0 14px rgba(240, 180, 41, 0.5);
 }
 
+/* 分析进度条 active 光圈（参考 demo 的 .pstep pulse，流程色=pt-medium 蓝） */
+@keyframes stage-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(91, 157, 255, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(91, 157, 255, 0); }
+}
+.animate-stage-pulse { animation: stage-pulse 1.2s infinite; }
+
 /* reactflow 暗色适配：画布点阵、边标签、控件统一走卷宗配色 */
 .react-flow__attribution { display: none; }
 
