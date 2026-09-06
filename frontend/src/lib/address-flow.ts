@@ -344,3 +344,64 @@ export function resolveHighlightIds(
   }
   return out;
 }
+
+/**
+ * 从 id 出发，沿有向边可达的所有**严格下游**节点（不含 id 本身）。
+ *
+ * 地址流虽近似有向无环，但自转账/回流地址可能形成自环或环路（A→A、A→B→A）。
+ * 为让折叠操作只隐藏严格下游、不隐藏触发折叠的节点本身，同时避免环导致死循环：
+ *   - 用独立于结果的 `visited` 集合记录已访问节点，并**预先加入起始 id**；
+ *     这样环路（或自环）回到起点时不会再把 id 计入结果（descendants）。
+ */
+export function computeDescendants(flow: AddressFlow, id: string): Set<string> {
+  const children = new Map<string, string[]>();
+  for (const e of flow.edges) {
+    const arr = children.get(e.source);
+    if (arr) arr.push(e.target);
+    else children.set(e.source, [e.target]);
+  }
+  const out = new Set<string>();
+  const visited = new Set<string>([id]); // 起始节点视为已访问：自环/环路不重新计入
+  const stack = [id];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    for (const c of children.get(cur) ?? []) {
+      if (!visited.has(c)) {
+        visited.add(c);
+        out.add(c);
+        stack.push(c);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 所有「已收回」节点的下游节点的并集——这些节点当前应隐藏。
+ *
+ * 折叠节点自身默认保持可见（以便用户再次展开并恢复下游）。唯一例外：
+ * 锚点位于另一锚点的下游时随父级一并隐藏（父级收回级联隐藏已收回的
+ * 子锚点，如 L1 收回须隐藏已收回的 L2）；互指环路（A→B→A）除外——
+ * 若互相隐藏则无锚点留存可展开，环路场景必须都豁免。
+ */
+export function hiddenSet(flow: AddressFlow, collapsed: Set<string>): Set<string> {
+  const descendants = new Map<string, Set<string>>();
+  const hidden = new Set<string>();
+  for (const id of collapsed) {
+    const d = computeDescendants(flow, id);
+    descendants.set(id, d);
+    for (const x of d) hidden.add(x);
+  }
+  for (const c of collapsed) {
+    const own = descendants.get(c)!;
+    let shadowed = false;
+    for (const [other, d] of descendants) {
+      if (other !== c && d.has(c) && !own.has(other)) {
+        shadowed = true;
+        break;
+      }
+    }
+    if (!shadowed) hidden.delete(c);
+  }
+  return hidden;
+}

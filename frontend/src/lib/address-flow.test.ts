@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hiddenSet,
   resolveHighlightIds,
   stopReasonOf,
   toAddressFlow,
@@ -142,5 +143,54 @@ describe("resolveHighlightIds", () => {
 
   it("不在子图中的 addr 引用被忽略", () => {
     expect(resolveHighlightIds(["addr:ghost"], flow)).toEqual(new Set());
+  });
+});
+
+describe("hiddenSet（折叠可见性）", () => {
+  // A --T1--> B --T2--> C：三层链
+  const chain = toAddressFlow({
+    nodes: [addrNode("A"), addrNode("B"), addrNode("C")],
+    edges: [
+      inputEdge("A", "T1", 1.0),
+      outputEdge("T1", "B", 1.0, 1.0),
+      inputEdge("B", "T2", 1.0),
+      outputEdge("T2", "C", 1.0, 1.0),
+    ],
+  });
+
+  it("父级收回应级联隐藏已收回的子锚点（L1 收回 → L2 一并隐藏）", () => {
+    // 回归：L2 已收回时，L1 点「收回」无法隐藏 L2（旧实现无条件豁免所有锚点）
+    const hidden = hiddenSet(chain, new Set(["addr:B", "addr:A"]));
+    expect(hidden.has("addr:B")).toBe(true); // B 被父级 A 遮蔽
+    expect(hidden.has("addr:C")).toBe(true);
+  });
+
+  it("单锚点保持可见，下游隐藏", () => {
+    const hidden = hiddenSet(chain, new Set(["addr:A"]));
+    expect(hidden.has("addr:A")).toBe(false);
+    expect(hidden.has("addr:B")).toBe(true);
+    expect(hidden.has("addr:C")).toBe(true);
+  });
+
+  it("互指环路（A→B→A）双锚点都豁免——否则无锚点可展开", () => {
+    const loop = toAddressFlow({
+      nodes: [addrNode("A"), addrNode("B")],
+      edges: [
+        inputEdge("A", "T1", 1.0),
+        outputEdge("T1", "B", 1.0, 1.0),
+        inputEdge("B", "T2", 1.0),
+        outputEdge("T2", "A", 1.0, 1.0),
+      ],
+    });
+    const hidden = hiddenSet(loop, new Set(["addr:A", "addr:B"]));
+    expect(hidden.has("addr:A")).toBe(false);
+    expect(hidden.has("addr:B")).toBe(false);
+  });
+
+  it("嵌套收回后仅展开父级：子锚点恢复可见（仍收回）", () => {
+    // collapsed 仍含 B，但 A 已不在集合 → B 不再被遮蔽，恢复为可见锚点
+    const hidden = hiddenSet(chain, new Set(["addr:B"]));
+    expect(hidden.has("addr:B")).toBe(false);
+    expect(hidden.has("addr:C")).toBe(true);
   });
 });
