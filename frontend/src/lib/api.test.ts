@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAuthStore } from "@/store/auth";
 
-const { api, ApiError } = await import("@/lib/api");
+const { api, ApiError, logout } = await import("@/lib/api");
 
 function resp(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -120,5 +120,42 @@ describe("幂等 GET 网络类失败自动重试（FE-23）", () => {
     await expect(api("/cases", { method: "POST", body: {} }))
       .rejects.toMatchObject({ status: 503 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("204 No Content 与 logout（issue #68）", () => {
+  it("204 响应不触发 JSON 解析错误，返回 null", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await expect(api("/auth/logout", { method: "POST" }))
+      .resolves.toBeNull();
+  });
+
+  it("logout 先 POST /auth/logout（带 CSRF 头），再清内存态与标记 cookie", async () => {
+    useAuthStore.setState({ accessToken: "t1", email: "a@b.c" });
+    document.cookie = "pt_auth=1; Path=/";
+    document.cookie = "pt_email=a%40b.c; Path=/";
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await logout();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("/auth/logout");
+    expect(init.method).toBe("POST");
+    expect(init.headers["X-Requested-With"]).toBe("XMLHttpRequest");
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(document.cookie).not.toContain("pt_auth=1");
+    expect(document.cookie).not.toContain("a%40b.c");
+  });
+
+  it("logout 请求失败仍清本地态，但错误可观测", async () => {
+    useAuthStore.setState({ accessToken: "t1", email: "a@b.c" });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockRejectedValue(new TypeError("network down"));
+
+    await logout();
+
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });

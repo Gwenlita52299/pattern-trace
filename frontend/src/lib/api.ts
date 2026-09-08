@@ -90,6 +90,20 @@ export async function restoreSession(): Promise<void> {
   }
 }
 
+// issue #68：退出必须终止服务端会话——HttpOnly refresh cookie JS 删不掉，
+// 只清内存态等于没退。请求失败仍清本地态，但错误要可观测（服务端会话
+// 可能仍有效，退出后旧 refresh token 或许还能换新 token）。
+export async function logout(): Promise<void> {
+  try {
+    await api("/auth/logout", { method: "POST", on401: "throw" });
+  } catch (err) {
+    console.error("[auth] server logout failed; session may still be active:",
+      err);
+  } finally {
+    useAuthStore.getState().clear();
+  }
+}
+
 function buildUrl(path: string, params?: RequestOptions["params"]): string {
   const qs = new URLSearchParams();
   Object.entries(params ?? {}).forEach(([k, v]) => {
@@ -160,6 +174,9 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
         }
         throw new ApiError(resp.status, detail, errorCode);
       }
+
+      // issue #68：204 No Content 没有 body，无条件 resp.json() 会抛错
+      if (resp.status === 204) return null as T;
 
       return (await resp.json()) as T;
     } catch (err) {

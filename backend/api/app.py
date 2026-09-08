@@ -375,6 +375,10 @@ def create_app() -> FastAPI:
     def _decode_access(authorization: str) -> dict | None:
         token = authorization.removeprefix("Bearer ").strip()
         payload = decode_token(token, settings.jwt_secret)
+        # issue #67：只接受显式 typ=access；否则 7 天有效期的 refresh token
+        # 可当 Bearer 用，绕过 access token 15 分钟有效期与撤销机制
+        if payload is None or payload.get("typ") != "access":
+            return None
         return payload
 
     def require_role(*roles: str):
@@ -393,7 +397,12 @@ def create_app() -> FastAPI:
         payload = _decode_access(authorization)
         if payload is None:
             return None
-        return _lookup_user(payload.get("sub", ""))
+        user = _lookup_user(payload.get("sub", ""))
+        # issue #69：停用/已删用户按匿名处理，否则 /addresses/analyze 会
+        # 把停用用户当已登录，绕过演示白名单与匿名配额
+        if user is None or not user.get("is_active", True):
+            return None
+        return user
 
     # ---- health ----
     @app.get("/healthz")
@@ -464,10 +473,16 @@ def create_app() -> FastAPI:
         limiter.reset("login_ip", ip)
         limiter.reset("login_email", body.email)
 
+        # issue #69：停用账号即使密码正确也拒绝，复用 INVALID_CREDENTIALS
+        # 保持防枚举语义（与「密码错误」不可区分）
+        if not user.get("is_active", True):
+            raise ProblemError(401, "Invalid credentials",
+                               "INVALID_CREDENTIALS")
+
         family_id = str(uuid.uuid4())
         refresh_jti = str(uuid.uuid4())
         access_token = create_token(
-            {"sub": body.email, "jti": str(uuid.uuid4())},
+            {"sub": body.email, "jti": str(uuid.uuid4()), "typ": "access"},
             settings.jwt_secret, access_ttl,
         )
         refresh_token = create_token(
@@ -526,12 +541,19 @@ def create_app() -> FastAPI:
         new_refresh_jti = str(uuid.uuid4())
         email = payload.get("sub", "")
 
+        # issue #69：refresh 凭 sub 重读用户，停用/已删账号的存量 refresh
+        # token 一律拒绝（否则停用后仍可续期会话）。置于 rotate 之前，
+        # 不消耗 rotation 状态
+        user = _lookup_user(email)
+        if user is None or not user.get("is_active", True):
+            raise ProblemError(401, "Invalid refresh token", "UNAUTHORIZED")
+
         if not _refresh_store.rotate(family_id, old_jti, new_refresh_jti):
             raise ProblemError(401, "Token reuse detected; please re-login",
                                "TOKEN_REUSE")
 
         access_token = create_token(
-            {"sub": email, "jti": str(uuid.uuid4())},
+            {"sub": email, "jti": str(uuid.uuid4()), "typ": "access"},
             settings.jwt_secret, access_ttl,
         )
         new_refresh_token = create_token(

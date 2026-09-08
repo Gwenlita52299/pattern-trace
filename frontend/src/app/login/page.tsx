@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
 import LoginForm from '@/components/LoginForm';
+import { sanitizeNextPath } from '@/lib/next-path';
 
 export default function LoginPage() {
   // 静态预渲染要求 useSearchParams 位于 Suspense 边界内
@@ -21,7 +22,8 @@ export default function LoginPage() {
 
 function LoginContent() {
   const search = useSearchParams();
-  const nextPath = search.get('next') ?? '/cases';
+  // issue #70：next 不可信，只放行站内绝对路径，非法值回退 /cases
+  const nextPath = sanitizeNextPath(search.get('next'));
 
   return (
     <main className="mx-auto flex max-w-sm flex-col px-4 py-24">

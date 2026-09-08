@@ -6,12 +6,11 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 import LoginForm from '@/components/LoginForm';
-import { restoreSession } from '@/lib/api';
+import { logout as serverLogout, restoreSession } from '@/lib/api';
 import { useAuthStore } from '@/store/auth';
 
 export default function UserMenu() {
   const email = useAuthStore((s) => s.email);
-  const clear = useAuthStore((s) => s.clear);
   const router = useRouter();
   const [loginOpen, setLoginOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -32,9 +31,11 @@ export default function UserMenu() {
     setLoginOpen(true);
   }
 
-  function logout() {
-    clear();
+  // issue #68：退出先请求服务端 /auth/logout 撤销 refresh token family
+  // （HttpOnly cookie 前端删不掉），完成后再清内存态并导航
+  async function logout() {
     setMenuOpen(false);
+    await serverLogout();
     router.push('/');
   }
 
