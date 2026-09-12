@@ -44,12 +44,13 @@ def template_family(name: str) -> str:
 
 
 def load_patterns(session) -> list[dict]:
+    # 不按 evidence_grade 过滤（issue #10 起 synth=S/confirmed=A）：
+    # 留出查询只用 lazarus_synth 族（循环内过滤），confirmed 作为库底存在
     rows = session.execute(text(
         "SELECT id, name, source, canonical_subgraph, "
         "       structural_features::text AS svec, "
         "       semantic_embedding::text AS evec "
-        "FROM patterns WHERE evidence_grade = 'A' "
-        "AND semantic_embedding IS NOT NULL")).mappings().all()
+        "FROM patterns WHERE semantic_embedding IS NOT NULL")).mappings().all()
     return [dict(r) for r in rows]
 
 

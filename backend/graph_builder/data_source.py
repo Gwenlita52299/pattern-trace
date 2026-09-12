@@ -346,7 +346,10 @@ class LiveEsploraProvider:
                 self.breaker.record_failure()
             if attempt < self.MAX_RETRIES - 1:
                 rng_wait = delay * random.uniform(0.7, 1.3)
-                _time.sleep(retry_after if retry_after is not None else rng_wait)
+                # Retry-After 与指数退避取大者：上游（blockstream 等）常给
+                # 过小的默认值（1.0s），连续 429 时固定 1s 重试等于没有退避
+                _time.sleep(max(retry_after if retry_after is not None else 0.0,
+                                rng_wait))
                 delay *= 2
         raise last_exc  # type: ignore[misc]
 

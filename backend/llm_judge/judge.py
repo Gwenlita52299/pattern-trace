@@ -27,7 +27,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low", "no_match"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v6"  # 物证统一为 addr：evidence 只允许引用地址节点 id
+PROMPT_VERSION = "v7"  # v7：evidence 数量上限 8（大子图下超长列表截断导致校验失败）
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -55,7 +55,8 @@ Rules:
 1. Output ONLY valid JSON matching the provided schema.
 2. Every ID in the "evidence" array MUST be an address node id \
 ("addr:...") from the input subgraph. Cite addresses only — never \
-transaction or edge IDs.
+transaction or edge IDs. Cite AT MOST 8 addresses: choose the strongest \
+evidence only (long evidence lists get truncated and fail validation).
 3. If no pattern matches, output risk_level="no_match" and recommended_action="review".
 4. Do not hallucinate transaction IDs or addresses.
 5. Confidence is a float between 0.0 and 1.0.
