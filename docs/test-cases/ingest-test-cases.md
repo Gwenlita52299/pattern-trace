@@ -5,10 +5,12 @@
 
 ---
 
-## IG-01 run_all.py 一键执行产出正负样本
+## IG-01 run_all.py 一键执行产出正样本
 
 - **优先级**：P0
 - **来源**：§7 验收标准第 1 条
+- **修订（2026-09）**：项目决策切换真实数据源后**无负样本**（负样本来源
+  待接入真实数据，见 IG-04 停用说明），验收口径改为仅正样本
 
 **前置条件**
 - Parquet 数据文件存在于配置路径
@@ -20,8 +22,10 @@
 
 **预期结果**
 - 脚本无报错完成
-- patterns 表有正样本（source=lazarus_confirmed, grade=A）和 pattern_negatives 表有负样本
+- patterns 表有正样本：confirmed（source=lazarus_confirmed, grade=A）
+  与 synthetic（source=lazarus_synth, grade=S）
 - 总量数千条级别
+- pattern_negatives 表为空（本阶段无负样本，不得有残留行）
 
 ---
 
@@ -62,10 +66,16 @@
 
 ---
 
-## IG-04 负样本写入独立表隔离
+## IG-04 负样本写入独立表隔离 — **已停用**
 
-- **优先级**：P0
+- **优先级**：~~P0~~ 已停用（2026-09）
 - **来源**：§3a 负样本隔离（评审架构师 #16）
+- **停用原因**：项目决策——真实数据阶段暂无负样本来源，合成负样本
+  （generate_negatives）不再执行。隔离原则（负样本绝不入 patterns 业务召回库）
+  仍然有效：pattern_negatives 表必须为空。待真实负样本来源接入后恢复本用例。
+
+<details>
+<summary>原用例（存档）</summary>
 
 **前置条件**
 - generate_negatives.py 已执行
@@ -78,12 +88,19 @@
 - 步骤 1 结果 = 0（负样本不在业务召回库）
 - 步骤 2 结果 > 0（负样本在独立表中）
 
+</details>
+
 ---
 
-## IG-05 负正比例 ≈ 3:1
+## IG-05 负正比例 ≈ 3:1 — **已停用**
 
-- **优先级**：P1
+- **优先级**：~~P1~~ 已停用（2026-09）
 - **来源**：§3 按 3:1 比例构造
+- **停用原因**：同 IG-04——无负样本则无比例可言；run_all 汇总校验中
+  的 IG-05 比例区间检查随负样本停用一并移除。
+
+<details>
+<summary>原用例（存档）</summary>
 
 **前置条件**
 - 正样本 N 条已知
@@ -94,12 +111,19 @@
 **预期结果**
 - 负:正比例 ∈ [2.5, 3.5] 区间（允许 ±17% 波动）
 
+</details>
+
 ---
 
-## IG-06 负样本满足无混币器/无黑名单条件
+## IG-06 负样本满足无混币器/无黑名单条件 — **已停用**
 
-- **优先级**：P1
+- **优先级**：~~P1~~ 已停用（2026-09）
 - **来源**：§3 条件约束
+- **停用原因**：同 IG-04——合成负样本不再生成，无样本可校验；
+  待真实负样本来源（公开浏览器抓取）接入后恢复。
+
+<details>
+<summary>原用例（存档）</summary>
 
 **前置条件**
 - generate_negatives.py 完成
@@ -112,6 +136,8 @@
 - 无一例接触混币器地址
 - 无一例命中黑名单标签
 
+</details>
+
 ---
 
 ## IG-07 标签集合入库
@@ -121,6 +147,7 @@
 
 **前置条件**
 - 混币器地址清单 + CoinJoin txids JSON 就绪
+- `ingest/seed/lazarus_btc_stolen_addresses.csv` 就绪（Lazarus 被盗地址标签）
 - 跨链判定不再预备 crosschain_tx_set（issue #5 已移除）；不需要 op_returns CSV
 
 **操作步骤**
@@ -129,6 +156,8 @@
 
 **预期结果**
 - addresses_meta.labels 包含混币器标记
+- addresses_meta 含 labels=["lazarus"] 条目（source=lazarus_stolen_csv），
+  实测约 4.5k 条；与 coinjoin 重叠地址的 labels 为两者并集（不互相覆盖）
 - coinjoin_txids 表有 Wasabi/JoinMarket 条目
 - 不再创建查询 crosschain_tx_set 表（链路已删除）
 - graph-builder 启动时可成功加载到内存 set/dict

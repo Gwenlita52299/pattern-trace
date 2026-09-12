@@ -70,12 +70,21 @@ class Settings(BaseSettings):
 
     # ingest（阶段2）— bybit_rust 基线数据根目录（含 results/ 与 data/）
     lazarus_data_dir: str = "/Users/gwenlita/Documents/bybit_rust/golden/python"
+    # 正样本子图数据源切换：golden = bybit_rust 基线 fixture（单文件
+    # subgraph_*.parquet）；cluster_k7 = 真实聚类子图（相对 repo 根的
+    # cluster_seed_dir 下按簇分目录，各含 nodes/edges/seeds parquet）
+    lazarus_subgraph_source: str = "cluster_k7"
+    cluster_seed_dir: str = "ingest/seed/patterns/cluster_k7"
     ingest_synth_positives: int = 1500   # playbook 语料规模；0 关闭
     ingest_synth_seed: int = 42          # 生成器随机种子（确定性/幂等）
     negative_ratio: int = 3              # 负:正（IG-05 允许 [2.5, 3.5]）
     embedding_provider: str = "stub"
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dim: int = 1536
+    # openai_compat（OpenRouter / SiliconFlow 等）：LFM2.5-Embedding-350M
+    # 输出 1024 维（DB vector 列与 HNSW 索引已随 0008 迁移对齐）
+    embedding_model: str = "liquid/lfm-2.5-embedding-350m"
+    embedding_dim: int = 1024
+    embedding_base_url: str = ""         # 如 https://openrouter.ai/api/v1
+    embedding_api_key: str = ""
     embedding_batch_size: int = 100
     embedding_cache_dir: str = ".cache/embeddings"
     embedding_fault_every: int = 0       # >0 时每 N 次 provider 调用模拟故障（IG-15）

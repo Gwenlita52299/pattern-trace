@@ -2,6 +2,8 @@
 
 数据源：
 - results/step2_label/coinjoin_outputs_labeled.parquet → addresses_meta（coinjoin 产出地址）
+- ingest/seed/lazarus_btc_stolen_addresses.csv → addresses_meta（lazarus 标签，
+  作为子图过滤的接触证据与 direct_related_to_lazarus 回填依据）
 
 配套说明：
 - CoinJoin 交易**不再由外部 csv（step1_coinjoin/coinjoin_txids.csv）供给**，
@@ -14,11 +16,44 @@
 """
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import pyarrow.parquet as pq
 
 COINJOIN_OUTPUTS_PARQUET = "results/step2_label/coinjoin_outputs_labeled.parquet"
+
+# seed 目录随仓库走（gitignore 内），不挂在 lazarus_data_dir 下；
+# 缺文件时跳过（CI / 无 seed 数据环境不阻塞标签加载）
+LAZARUS_LABELS_CSV = Path(__file__).resolve().parent / "seed" / \
+    "lazarus_btc_stolen_addresses.csv"
+
+
+def parse_lazarus_csv(path: Path) -> list[dict]:
+    """解析 Lazarus 被盗地址 CSV → AddressMeta 行（纯函数，便于单测）。"""
+    if not path.exists():
+        return []
+    rows = []
+    with open(path, newline="", encoding="utf-8") as fh:
+        for raw in csv.DictReader(fh):
+            addr = (raw.get("address") or "").strip()
+            if not addr:
+                continue
+            rows.append({"address": addr, "labels": ["lazarus"],
+                         "source": "lazarus_stolen_csv"})
+    return rows
+
+
+def _merge_with_existing(session, model, rows: list[dict]) -> list[dict]:
+    """与库中已有 labels 求并集——lazarus upsert 不能覆盖同地址的 coinjoin 标签。"""
+    if not rows:
+        return rows
+    addrs = [r["address"] for r in rows]
+    existing = {r.address: set(r.labels or ())
+                for r in session.query(model).filter(model.address.in_(addrs))}
+    for r in rows:
+        r["labels"] = sorted(existing.get(r["address"], set()) | set(r["labels"]))
+    return rows
 
 
 def _upsert(session, model, rows: list[dict], key_cols: list[str]) -> int:
@@ -37,13 +72,21 @@ def run(session, base_dir: str | None = None) -> dict[str, int]:
     counts: dict[str, int] = {}
 
     # --- CoinJoin 产出地址 → addresses_meta ---
+    # 同样走 label 合并：重跑时不得覆盖同地址上已合并的 lazarus 标签
     table = pq.read_table(base / COINJOIN_OUTPUTS_PARQUET)
     addr_rows = []
     for addr in {a.strip() for a in table.column("address").to_pylist() if a}:
         addr_rows.append({"address": addr, "labels": ["coinjoin"],
                           "source": "step2_label"})
+    addr_rows = _merge_with_existing(session, _model("AddressMeta"), addr_rows)
     counts["addresses_meta"] = _upsert(
         session, _model("AddressMeta"), addr_rows, ["address"])
+
+    # --- Lazarus 被盗地址 → addresses_meta（labels=["lazarus"]）---
+    lazarus_rows = _merge_with_existing(
+        session, _model("AddressMeta"), parse_lazarus_csv(LAZARUS_LABELS_CSV))
+    counts["lazarus_labels"] = _upsert(
+        session, _model("AddressMeta"), lazarus_rows, ["address"])
 
     return counts
 

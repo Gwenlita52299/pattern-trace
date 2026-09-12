@@ -65,6 +65,13 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
+      - ESPLORA_API_URL=${ESPLORA_API_URL:-https://mempool.space/api}
+      # RT-04 模型锁：容器内 provider 配置必须与 DB 已写入向量的模型一致
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-stub}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-liquid/lfm-2.5-embedding-350m}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
       - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
@@ -103,6 +110,13 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
+      - ESPLORA_API_URL=${ESPLORA_API_URL:-https://mempool.space/api}
+      # worker 内 orchestration 跑 Retriever，embedding 配置必须与 backend 一致
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-stub}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-liquid/lfm-2.5-embedding-350m}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
       - REPORTS_DIR=/app/output/reports
     volumes:

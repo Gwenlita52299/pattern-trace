@@ -2,7 +2,11 @@
 
 顺序（标签先行：切图的混币器接触判定依赖 addresses_meta/coinjoin_txids）：
     load_labels → load_lazarus_subgraphs → corpus_gen(synth 正样本)
-    → generate_negatives(3:1) → compute_embeddings(两表)
+    → compute_embeddings(两表)
+
+无负样本（2026-09 项目决策）：真实数据阶段负样本来源未接入，合成负样本
+（generate_negatives）不再执行，pattern_negatives 保持为空（IG-04 停用，
+隔离原则不变）。模块保留存档，待真实负样本来源接入后恢复。
 
 并发安全（IG-17）：pg advisory lock 串行化整个流程，双实例同时启动时
 第二个阻塞等待而非竞态写入；配合 (seed_address, content_hash) 唯一约束
@@ -32,7 +36,6 @@ def main(argv: list[str] | None = None) -> int:
         from . import (
             compute_embeddings,
             corpus_gen,
-            generate_negatives,
             load_labels,
             load_lazarus_subgraphs,
         )
@@ -40,7 +43,6 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:  # 直接运行（python ingest/run_all.py）
         import compute_embeddings
         import corpus_gen
-        import generate_negatives
         import load_labels
         import load_lazarus_subgraphs
         from common import get_engine, ingest_lock
@@ -64,14 +66,12 @@ def main(argv: list[str] | None = None) -> int:
                 corpus_gen.run(session, synth_n, settings.ingest_synth_seed)
                 session.commit()
 
-            generate_negatives.run(session, ratio=settings.negative_ratio,
-                                   seed_key=settings.ingest_synth_seed)
-            session.commit()
             embeddings = compute_embeddings.run(session)
 
             # 汇总校验（IG-01/05）：positive 口径 = patterns 表全部行
-            # （confirmed + synthetic，issue #10 不再以 evidence_grade='A' 为口径）；
-            # 负样本仅存于 pattern_negatives，不入 patterns（IG-04）。
+            # （confirmed + synthetic，issue #10 不再以 evidence_grade='A' 为口径）。
+            # 无负样本阶段（IG-04/05 停用）：pattern_negatives 必须为空，
+            # 负样本源（constructed_normal）不得出现在 patterns 业务召回库。
             from sqlalchemy import func
 
             from backend.models.knowledge import Pattern, PatternNegative
@@ -85,27 +85,25 @@ def main(argv: list[str] | None = None) -> int:
             neg_in_patterns = (session.query(func.count(Pattern.id))
                                .filter(Pattern.source == "constructed_normal").scalar() or 0)
 
-    ratio = neg_total / pos_total if pos_total else 0.0
     print("\n===== run_all 汇总 =====")
     print(f"labels: {labels}")
     print(f"positives: total={pos_total} "
           f"(confirmed={pos_confirmed}, synthetic={pos_synth})")
-    print(f"negatives: {neg_total}  ratio(neg:pos)={ratio:.2f}:1 "
-          f"(目标 {settings.negative_ratio}:1)")
+    print(f"negatives: {neg_total}（无负样本阶段，预期 0）")
     print(f"embeddings: {embeddings}")
 
     problems = []
-    if pos_total == 0 or neg_total == 0:
-        problems.append("正或负样本为空（IG-01）")
+    if pos_total == 0:
+        problems.append("正样本为空（IG-01）")
+    if neg_total != 0:
+        problems.append("无负样本阶段 pattern_negatives 应为空（IG-04 停用）")
     if neg_in_patterns != 0:
         problems.append("负样本泄漏进 patterns 业务召回库（IG-04）")
-    if not 2.5 <= ratio <= 3.5:  # IG-05 允许区间
-        problems.append(f"负正比例 {ratio:.2f} 越界（IG-05）")
     for p in problems:
         print(f"❌ {p}")
     if problems:
         return 1
-    print("✅ 入库完成：知识库可查询，比例达标")
+    print("✅ 入库完成：知识库可查询")
     return 0
 
 

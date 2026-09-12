@@ -29,14 +29,17 @@ ingest/
 
 ## 2. 正样本来源
 
-数据源路径（本地）：
-```
-/Users/gwenlita/Documents/bybit_rust/golden/python/results/step3_subgraph/
-├── subgraph_nodes.parquet
-├── subgraph_edges.parquet
-└── _edges_batches/*
-/Users/gwenlita/Documents/bybit_rust/golden/python/results/step2_label/
-```
+数据源可切换（`settings.lazarus_subgraph_source`）：
+
+- **cluster_k7（默认，真实数据）**：`ingest/seed/patterns/cluster_k7/<C>/` 按簇分目录，
+  各含 `nodes/edges/seeds.parquet`（seeds 与节点表 `first_layer==0` 冗余，不单独读取）；
+  节点表无 `direct_related_to_lazarus` 列，由 Lazarus 标签表回填
+- **golden（基线 fixture）**：`/Users/gwenlita/Documents/bybit_rust/golden/python/results/step3_subgraph/`
+  单文件布局（subgraph_nodes.parquet / subgraph_edges.parquet）
+
+配套标签（§4）：`ingest/seed/lazarus_btc_stolen_addresses.csv` → addresses_meta
+（labels=["lazarus"]），作为混币器/接触过滤证据并回填 direct_related_to_lazarus。
+`ingest/seed/test_top20_*.csv` 为评测候选集，不入库。
 
 处理步骤：
 1. 读取 Parquet → 按 seed_address 分组为独立子图
@@ -47,7 +50,7 @@ ingest/
 6. 计算 WL 子树核指纹
 7. 写入 patterns 表，evidence_grade = 'A'，source = 'lazarus_confirmed'，provenance = 'confirmed'
 
-预期产出：~数千条正样本 pattern。
+预期产出：~数千条正样本 pattern（cluster_k7 实测 6899 seed → 4227 通过过滤）。
 
 ### 2a. 合成正样本（source=lazarus_synth，provenance=synthetic）
 
@@ -68,6 +71,10 @@ ingest/
 `provenance='confirmed'`、`evidence_grade='A'` 入库，二者永不混淆。
 
 ## 3. 负样本构造
+
+> **已停用（2026-09，项目决策）**：真实数据阶段无负样本来源，合成负样本不再
+> 生成，pattern_negatives 保持为空。隔离原则（§3a）继续有效；真实负样本来源
+> （公开浏览器抓取，P2）接入后恢复本节与 IG-04/05/06。
 
 - 从公开区块链浏览器获取普通钱包地址的交易数据
 - 条件：无混币器接触、无黑名单标签、交易频率正常

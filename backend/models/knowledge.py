@@ -45,7 +45,7 @@ class Pattern(Base):
     canonical_subgraph = Column(JSONB, nullable=False)
     # 向量由 compute_embeddings.py 二段填充；入库脚本先写行、后补向量
     structural_features = Column(Vector(20))
-    semantic_embedding = Column(Vector(1536))
+    semantic_embedding = Column(Vector(1024))
     embedding_model = Column(String(100), default="", nullable=False)
     embedding_dim = Column(Integer)
     wl_fingerprint = Column(JSONB)
@@ -71,7 +71,7 @@ class PatternNegative(Base):
     description = Column(Text, default="")
     canonical_subgraph = Column(JSONB, nullable=False)
     structural_features = Column(Vector(20))
-    semantic_embedding = Column(Vector(1536))
+    semantic_embedding = Column(Vector(1024))
     embedding_model = Column(String(100), default="", nullable=False)
     embedding_dim = Column(Integer)
     wl_fingerprint = Column(JSONB)
