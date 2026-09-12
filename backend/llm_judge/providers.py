@@ -29,7 +29,7 @@ class LLMClient(abc.ABC):
         messages: list[dict],
         json_schema: dict | None = None,
         temperature: float = 0.0,
-        max_tokens: int = 1024,
+        max_tokens: int = 4096,
     ) -> str: ...
 
     @property
@@ -99,7 +99,7 @@ class OpenAIClient(_HTTPClient):
                                  transport=self._transport)
 
     async def complete(self, messages, json_schema=None, temperature=0.0,
-                       max_tokens=1024) -> str:
+                       max_tokens=4096) -> str:
 
         if json_schema is not None and not self.strict_schema:
             # 非严格端点不支持 json_schema：schema 文本并入 system，
@@ -154,7 +154,7 @@ class AnthropicClient(_HTTPClient):
         self._transport = transport
 
     async def complete(self, messages, json_schema=None, temperature=0.0,
-                       max_tokens=1024) -> str:
+                       max_tokens=4096) -> str:
         import httpx
 
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
@@ -190,7 +190,7 @@ class OllamaClient(_HTTPClient):
         self._transport = transport
 
     async def complete(self, messages, json_schema=None, temperature=0.0,
-                       max_tokens=1024) -> str:
+                       max_tokens=4096) -> str:
         import httpx
 
         body: dict = {

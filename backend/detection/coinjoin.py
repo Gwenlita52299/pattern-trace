@@ -13,8 +13,10 @@
     low_fee         手续费占比 <= max_fee_ratio（金额 / 手续费相对比例）
     bech32          输出 bech32 占比 >= bech32_ratio（Wasabi 原生 segwit 输出）
 
-判定：`core = fan_in_out AND equal_outputs`（硬条件）；`score` = 各规则按权重加权；
-`is_coinjoin = core AND score >= score_threshold`。所有阈值集中在 HeuristicConfig，
+判定：`core = fan_in_out`（硬条件，inputs/outputs ≥ 10）；`score` = 各规则按权重加权；
+`is_coinjoin = core AND score >= score_threshold`。等额输出不作为硬条件——真实
+大型异面额轮次的等额占比可低于 10%，仅在加权规则中贡献最强信号（0.25）。
+所有阈值集中在 HeuristicConfig，
 默认值按 Wasabi 等额 CoinJoin 的典型轮廓给出，可构造时覆盖（启发式，随生态演进调参）。
 """
 from __future__ import annotations
@@ -36,8 +38,8 @@ RULE_WEIGHTS: dict[str, float] = {
 
 @dataclass(frozen=True)
 class HeuristicConfig:
-    min_inputs: int = 2
-    min_outputs: int = 3
+    min_inputs: int = 10
+    min_outputs: int = 10
     equal_output_ratio: float = 0.6       # 输出值==众数的占比下界
     max_output_entropy: float = 1.0       # 输出金额熵上界（等额≈0）
     unique_input_ratio: float = 0.8       # 输入地址唯一性下界
@@ -156,7 +158,9 @@ class CoinJoinDetector:
     def verdict(self, tx) -> CoinJoinVerdict:
         feats = extract_features(tx)
         rules = evaluate_rules(feats, self.config)
-        core = rules["fan_in_out"] and rules["equal_outputs"]
+        # core 仅 fan_in_out（真实案例：大型异面额轮次等额占比可低至 6%，
+        # 等额作为硬门会漏判；它保留在加权规则中继续贡献最强信号）
+        core = rules["fan_in_out"]
         score = score_rules(rules)
         is_coinjoin = core and score >= self.config.score_threshold
         return CoinJoinVerdict(is_coinjoin=is_coinjoin, score=score, core=core,

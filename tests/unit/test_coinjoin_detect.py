@@ -57,11 +57,11 @@ class TestFeaturesAndRules:
         rules = evaluate_rules(extract_features(coinjoin_tx()), HeuristicConfig())
         assert all(rules.values())
 
-    def test_normal_tx_fails_equal_outputs_core(self):
+    def test_normal_tx_fails_core(self):
+        # 普通交易 3 in / 3 out：低于新宽度阈值 10/10，core 直接拦截
         rules = evaluate_rules(extract_features(normal_tx()), HeuristicConfig())
-        assert rules["fan_in_out"] is True        # 3 in / 3 out 满足宽度
-        assert rules["equal_outputs"] is False    # 金额分散 → 等额规则拦截
-        assert not (rules["fan_in_out"] and rules["equal_outputs"])
+        assert rules["fan_in_out"] is False
+        assert rules["equal_outputs"] is False    # 金额分散，加权规则也拦截
 
     def test_single_input_many_equal_outputs_not_coinjoin(self):
         # 单选输出+多等额输出（airdrop/领奖类）不是 CoinJoin：扇入宽度不足
