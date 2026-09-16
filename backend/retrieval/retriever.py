@@ -22,20 +22,22 @@ try:
         describe_subgraph,
         generate_difference_note,
         structural_features,
-        wl_subtree_similarity,
     )
+    from .channels import channel_scores
 except ImportError:  # 允许以脚本方式单独加载本模块
     from backend.retrieval.embedding import build_provider
     from backend.retrieval.features import (
         describe_subgraph,
         generate_difference_note,
         structural_features,
-        wl_subtree_similarity,
     )
+    from backend.retrieval.channels import channel_scores
 
 # 与 ingest canonical 同 schema 的键集——两个向量空间必须同构
 _NODE_KEYS = ("id", "kind", "label", "first_layer", "total_received_btc",
-              "total_sent_btc", "utxo_count", "direct_related_to_lazarus")
+              "total_sent_btc", "utxo_count", "direct_related_to_lazarus",
+              "confirmed_downstream", "probably_lazarus_related",
+              "is_censored")
 _EDGE_KEYS = ("id", "source", "target", "txid", "tx_layer", "value_ratio",
               "src_value_btc", "dst_value_btc", "total_num_inputs",
               "total_num_outputs", "is_stopped_expansion", "is_remixer",
@@ -94,6 +96,9 @@ class PatternCandidate:
     structural_similarity: float = 0.0
     semantic_similarity: float = 0.0
     wl_kernel_score: float = 0.0
+    # benchmark 通道分（wl_kernel_score 即 wljac 通道，字段名保留兼容）
+    fp_score: float = 0.0
+    ov_score: float = 0.0
     evidence_grade: str = "A"
     # issue #10：来源性质与证据等级分离——合成模板(source=lazarus_synth,
     # provenance=synthetic)只作结构检索参考，不会被解释为真实链上证据。
@@ -279,20 +284,39 @@ class Retriever:
     # -- 精排 --------------------------------------------------------------
     def _rerank(self, query_canon: dict, recalled: list[dict],
                 k: int) -> RetrievalResult:
-        iterations = getattr(self.settings, "wl_iterations", 3)
-        scored: list[tuple[float, float, float, dict]] = []
+        """benchmark 通道组合精排（unseen-similarity 基准最终组合）：
+
+            final = w_cos·cos + w_wljac·wljac + w_fp·fp + w_ov·ov
+
+        cos = stage1 混合召回分；结构通道（wljac/fp/ov）在 canonical
+        子图上计算，全部 scale-invariant、不读真值标签（防泄漏）。
+        """
+        iterations = getattr(self.settings, "wl_iterations", 4)
+        w_cos = getattr(self.settings, "channel_w_cos", 0.1)
+        w_align = getattr(self.settings, "channel_w_align", 0.0)
+        w_wljac = getattr(self.settings, "channel_w_wljac", 0.1)
+        w_fp = getattr(self.settings, "channel_w_fp", 0.0)
+        w_ov = getattr(self.settings, "channel_w_ov", 0.8)
+        if w_align > 0:
+            # align 通道需要节点级 embedding 语料（基准用 graphormer ego
+            # embedding）——静默降级为 0 分会污染排序，显式拒绝
+            raise ValueError(
+                "channel_w_align>0 需要节点 embedding 语料（P2 未接入）")
+        w_sum = w_cos + w_wljac + w_fp + w_ov or 1.0
+        scored: list[tuple[float, float, float, float, dict]] = []
         for row in recalled:
             cand_canon = row["canonical_subgraph"] or {"nodes": [], "edges": []}
-            wl = wl_subtree_similarity(query_canon, cand_canon,
-                                       iterations=iterations)
-            hybrid_sim = max(0.0, min(1.0 - row["dist"], 1.0))
-            # 最终分：WL 结构核主导，混合召回相似度作平滑项
-            final = round(0.6 * wl + 0.4 * hybrid_sim, 6)
-            scored.append((final, wl, hybrid_sim, row))
+            chans = channel_scores(query_canon, cand_canon, iterations=iterations)
+            wl = chans["wljac"]
+            fp = chans["fp"]
+            ov = chans["ov"]
+            cos = max(0.0, min(1.0 - row["dist"], 1.0))
+            final = (w_cos * cos + w_wljac * wl + w_fp * fp + w_ov * ov) / w_sum
+            scored.append((round(final, 6), wl, fp, ov, row))
 
-        scored.sort(key=lambda t: (-t[0], t[3]["id"]))
+        scored.sort(key=lambda t: (-t[0], t[4]["id"]))
         candidates = []
-        for final, wl, hybrid_sim, row in scored[:k]:
+        for final, wl, fp, ov, row in scored[:k]:
             cand_canon = row["canonical_subgraph"] or {"nodes": [], "edges": []}
             candidates.append(PatternCandidate(
                 pattern_id=row["id"],
@@ -303,6 +327,8 @@ class Retriever:
                 structural_similarity=round(row["struct_sim"], 6),
                 semantic_similarity=round(row["sem_sim"], 6),
                 wl_kernel_score=round(wl, 6),
+                fp_score=round(fp, 6),
+                ov_score=round(ov, 6),
                 evidence_grade=row.get("evidence_grade") or "A",
                 source=row.get("source") or "lazarus_confirmed",
                 provenance=row.get("provenance") or "confirmed",

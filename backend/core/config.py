@@ -92,10 +92,21 @@ class Settings(BaseSettings):
     # retrieval（阶段3）— 混合召回权重仅服务端配置（spec §5，禁止请求传入）
     w_struct: float = 0.7
     w_semantic: float = 0.3
-    retrieval_recall_limit: int = 20     # 混合召回 Top-N（进入 WL 精排的候选数）
+    # 召回 Top-N：与 unseen-similarity 基准 STAGE1_N=500 对齐——通道组合
+    # 的收益依赖足够大的精排池（池内随机基线 75% vs 全库 27%）
+    retrieval_recall_limit: int = 500
     retrieval_top_k: int = 4             # 精排后返回数（spec：Top-3~5）
-    wl_iterations: int = 3               # 带属性 WL 子树核迭代轮数
+    wl_iterations: int = 4               # 方向感知 WL 轮数（基准 4 轮）
     retrieval_ann_mode: bool = False     # RT-07 P2：两路 HNSW + RRF（规模化预留）
+
+    # 精排通道权重 — unseen-similarity 基准最终组合
+    # 0.1·cos + 0.1·wljac + 0.8·ov（dev 网格 + 5 轮验证，conf-hit@10 99.0%）
+    # align 通道需要节点 embedding 语料（P2），权重必须保持 0
+    channel_w_cos: float = 0.1
+    channel_w_align: float = 0.0
+    channel_w_wljac: float = 0.1
+    channel_w_fp: float = 0.0
+    channel_w_ov: float = 0.8
 
     # 阶段4 — LLM 判断与编排
     graph_data_mode: str = "fixture"     # fixture | live（live 走 esplora_api_url）

@@ -56,6 +56,9 @@ class _Sub:
             "first_layer": first_layer,
             "total_received_btc": 0.0, "total_sent_btc": 0.0,
             "utxo_count": 1, "direct_related_to_lazarus": False,
+            "confirmed_downstream": False,
+            "probably_lazarus_related": False,
+            "is_censored": False,
         })
 
     def spend(self, rng: random.Random, src: str, dsts: list[str | None],

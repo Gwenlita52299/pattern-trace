@@ -46,6 +46,11 @@ EDGE_COLS = {
 
 MIN_PATTERN_NODES = 5  # §2 过滤：节点数 ≥ 5
 
+# 闭包规模上限（与 graphormer_test 基准 closure_edges 的 MAX_DEPTH/NODE_CAP 一致）：
+# 检索通道按同一闭包语义比较，入库切片必须同构，否则通道分数系统性偏差
+CLOSURE_MAX_DEPTH = 4
+CLOSURE_NODE_CAP = 200
+
 # issue #10：source → provenance。合成样本只作检索参考，不代表真实链上交易；
 # 负样本仅用于阈值校准与误报评估。evidence_grade 与 provenance 分离：
 # confirmed 可用真实等级(A/B)，synthetic 用 S，negative 用 B。
@@ -150,10 +155,14 @@ def slice_by_seed(node_rows: list[dict], edge_rows: list[dict]) -> list[Subgraph
                 continue
             seen_nodes.add(addr)
             sub.nodes.append(_node_dict(rows_by_addr[addr]))
+            if len(seen_nodes) >= CLOSURE_NODE_CAP:
+                break  # 边已随 src 处理入列，超出 cap 的 dst 保持悬挂（基准同语义）
             for e in out_by_src.get(addr, []):
                 sub.edges.extend(_edge_dicts(e))
                 dst = e.get("dst_address")
-                if dst and dst not in seen_nodes:
+                if (dst and dst not in seen_nodes
+                        and _int(rows_by_addr.get(dst, {}).get("first_layer", 99))
+                        <= CLOSURE_MAX_DEPTH):
                     queue.append(dst)
 
         # parquet 边可能引用节点表之外的端点：补占位节点，
@@ -175,6 +184,9 @@ def slice_by_seed(node_rows: list[dict], edge_rows: list[dict]) -> list[Subgraph
                         "label": end.split(":", 1)[1], "first_layer": -1,
                         "total_received_btc": 0.0, "total_sent_btc": 0.0,
                         "utxo_count": 0, "direct_related_to_lazarus": False,
+                        "confirmed_downstream": False,
+                        "probably_lazarus_related": False,
+                        "is_censored": False,
                     })
                 known.add(end)
         subgraphs.append(sub)
@@ -192,6 +204,11 @@ def _node_dict(row: dict) -> dict:
         "total_sent_btc": _num(row.get("total_sent_btc")),
         "utxo_count": _int(row.get("utxo_count")),
         "direct_related_to_lazarus": bool(row.get("direct_related_to_lazarus")),
+        # 与基线节点表对齐的三级标签（confirmed/probably 为评估真值，
+        # 不得进入检索特征；is_censored 参与规模统计）
+        "confirmed_downstream": bool(row.get("confirmed_downstream")),
+        "probably_lazarus_related": bool(row.get("probably_lazarus_related")),
+        "is_censored": bool(row.get("is_censored")),
     }
 
 

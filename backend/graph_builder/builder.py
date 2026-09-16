@@ -59,6 +59,12 @@ class Node:
     total_sent_btc: float = 0.0
     utxo_count: int = 0
     direct_related_to_lazarus: bool = False
+    # 与基线 step3_subgraph 节点表对齐的三级标签（canonical schema 一致性）：
+    # confirmed/probably 是 Lazarus 归因硬真值，检索通道严禁读取（防泄漏），
+    # 仅用于评估与真值判定；is_censored 参与规模统计特征
+    confirmed_downstream: bool = False
+    probably_lazarus_related: bool = False
+    is_censored: bool = False
 
 
 @dataclass

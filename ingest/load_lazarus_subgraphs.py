@@ -44,6 +44,12 @@ except ImportError:  # 直接运行（python ingest/load_lazarus_subgraphs.py）
 
 SUBGRAPH_DIR = "results/step3_subgraph"
 
+# 三级 Lazarus 标签 + 截断标记：cluster_k7 布局可能缺列（缺省 False），
+# golden/基准数据布局必含——列为可选项，存在即随行携带
+NODE_OPTIONAL_COLS = [
+    "confirmed_downstream", "probably_lazarus_related", "is_censored",
+]
+
 EDGE_OPTIONAL_COLS = [
     "src_address", "dst_address", "txid", "tx_layer",
     "total_num_inputs", "total_num_outputs", "dst_value_btc",
@@ -62,12 +68,17 @@ def _edge_rows_from(edges_tbl) -> list[dict]:
                              if c in edges_tbl.column_names])
 
 
+def _node_cols(table) -> list[str]:
+    return [c for c in list(NODE_COLS) + NODE_OPTIONAL_COLS
+            if c in table.column_names]
+
+
 def slice_from_dir(base_dir: Path) -> tuple[list[dict], list[dict]]:
     """读取并校验 nodes/edges Parquet，返回行列表（纯数据，无 DB 副作用）。"""
     d = base_dir / SUBGRAPH_DIR
     nodes_tbl = read_validated_parquet(str(d / "subgraph_nodes.parquet"), NODE_COLS)
     edges_tbl = read_validated_parquet(str(d / "subgraph_edges.parquet"), EDGE_COLS)
-    return _rows(nodes_tbl, list(NODE_COLS)), _edge_rows_from(edges_tbl)
+    return _rows(nodes_tbl, _node_cols(nodes_tbl)), _edge_rows_from(edges_tbl)
 
 
 def slice_from_clusters(cluster_dir: Path) -> tuple[list[dict], list[dict]]:
@@ -82,7 +93,7 @@ def slice_from_clusters(cluster_dir: Path) -> tuple[list[dict], list[dict]]:
     for cluster in sorted(p for p in cluster_dir.iterdir() if p.is_dir()):
         nodes_tbl = read_validated_parquet(str(cluster / "nodes.parquet"), NODE_COLS)
         edges_tbl = read_validated_parquet(str(cluster / "edges.parquet"), EDGE_COLS)
-        node_rows += _rows(nodes_tbl, list(NODE_COLS))
+        node_rows += _rows(nodes_tbl, _node_cols(nodes_tbl))
         edge_rows += _edge_rows_from(edges_tbl)
     return node_rows, edge_rows
 
