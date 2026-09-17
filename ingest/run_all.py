@@ -1,8 +1,10 @@
 """一键入库全流程 — ingest-spec §7 / IG-01 / IG-10 / IG-17。
 
 顺序（标签先行：切图的混币器接触判定依赖 addresses_meta/coinjoin_txids）：
-    load_labels → load_lazarus_subgraphs → corpus_gen(synth 正样本)
-    → compute_embeddings(两表)
+    load_labels → load_lazarus_subgraphs → compute_embeddings
+
+2026-09 项目决策：知识库只用真实数据（lazarus_confirmed），synth 语料不再
+入库参与匹配（corpus_gen 保留存档，--synth 显式开启）。
 
 无负样本（2026-09 项目决策）：真实数据阶段负样本来源未接入，合成负样本
 （generate_negatives）不再执行，pattern_negatives 保持为空（IG-04 停用，
@@ -13,8 +15,8 @@
 双重保证幂等。
 
 用法：
-    python -m ingest.run_all                 # 全流程
-    python -m ingest.run_all --no-synth      # 仅真实 golden 数据
+    python -m ingest.run_all                 # 全流程（仅真实数据）
+    python -m ingest.run_all --synth         # 追加 playbook 合成正样本
 """
 from __future__ import annotations
 
@@ -25,8 +27,8 @@ import sys
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="PatternTrace 知识库一键入库")
-    parser.add_argument("--no-synth", action="store_true",
-                        help="跳过 playbook 合成正样本")
+    parser.add_argument("--synth", action="store_true",
+                        help="追加 playbook 合成正样本（默认关闭）")
     args = parser.parse_args(argv)
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,11 +40,13 @@ def main(argv: list[str] | None = None) -> int:
             corpus_gen,
             load_labels,
             load_lazarus_subgraphs,
+            load_graphormer_candidates,
         )
         from .common import get_engine, ingest_lock
     except ImportError:  # 直接运行（python ingest/run_all.py）
         import compute_embeddings
         import corpus_gen
+        import load_graphormer_candidates
         import load_labels
         import load_lazarus_subgraphs
         from common import get_engine, ingest_lock
@@ -58,15 +62,26 @@ def main(argv: list[str] | None = None) -> int:
         with Session(engine) as session:
             labels = load_labels.run(session)
             session.commit()
-            load_lazarus_subgraphs.run(session)
-            session.commit()
 
-            synth_n = 0 if args.no_synth else settings.ingest_synth_positives
-            if synth_n:
-                corpus_gen.run(session, synth_n, settings.ingest_synth_seed)
+            kb_stats: dict = {}
+            if settings.lazarus_subgraph_source == "graphormer_v2":
+                # benchmark 数据源：candidates 直写 Graphormer 向量，
+                # 文本 semantic_embedding 不参与召回（unseen-sim 基准口径）。
+                # --synth 仅对 legacy 数据源生效（graphormer 路径无文本 embedding）
+                kb_stats = load_graphormer_candidates.run(session)
+                session.commit()
+                embeddings = {"provider": "graphormer_pooled(784d)",
+                              "note": "semantic embedding skipped"}
+            else:
+                load_lazarus_subgraphs.run(session)
                 session.commit()
 
-            embeddings = compute_embeddings.run(session)
+                synth_n = settings.ingest_synth_positives if args.synth else 0
+                if synth_n:
+                    corpus_gen.run(session, synth_n, settings.ingest_synth_seed)
+                    session.commit()
+
+                embeddings = compute_embeddings.run(session)
 
             # 汇总校验（IG-01/05）：positive 口径 = patterns 表全部行
             # （confirmed + synthetic，issue #10 不再以 evidence_grade='A' 为口径）。
@@ -87,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print("\n===== run_all 汇总 =====")
     print(f"labels: {labels}")
+    if kb_stats:
+        print(f"graphormer_v2: {kb_stats}")
     print(f"positives: total={pos_total} "
           f"(confirmed={pos_confirmed}, synthetic={pos_synth})")
     print(f"negatives: {neg_total}（无负样本阶段，预期 0）")

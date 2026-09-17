@@ -72,9 +72,12 @@ class Settings(BaseSettings):
     lazarus_data_dir: str = "/Users/gwenlita/Documents/bybit_rust/golden/python"
     # 正样本子图数据源切换：golden = bybit_rust 基线 fixture（单文件
     # subgraph_*.parquet）；cluster_k7 = 真实聚类子图（相对 repo 根的
-    # cluster_seed_dir 下按簇分目录，各含 nodes/edges/seeds parquet）
-    lazarus_subgraph_source: str = "cluster_k7"
+    # cluster_seed_dir 下按簇分目录，各含 nodes/edges/seeds parquet）；
+    # graphormer_v2 = benchmark confirmed 候选闭包（9,346 条，
+    # load_graphormer_candidates 直写 Graphormer 向量，unseen-sim 基准口径）
+    lazarus_subgraph_source: str = "graphormer_v2"
     cluster_seed_dir: str = "ingest/seed/patterns/cluster_k7"
+    graphormer_data_dir: str = "ingest/seed/graphormer_v2"
     ingest_synth_positives: int = 1500   # playbook 语料规模；0 关闭
     ingest_synth_seed: int = 42          # 生成器随机种子（确定性/幂等）
     negative_ratio: int = 3              # 负:正（IG-05 允许 [2.5, 3.5]）

@@ -23,7 +23,9 @@ try:
         generate_difference_note,
         structural_features,
     )
-    from .channels import channel_scores
+    from .channels import channel_scores, scores_from_fingerprints
+    from .channels import build_fingerprint
+    from .graphormer import graphormer_query_vector
 except ImportError:  # 允许以脚本方式单独加载本模块
     from backend.retrieval.embedding import build_provider
     from backend.retrieval.features import (
@@ -31,7 +33,9 @@ except ImportError:  # 允许以脚本方式单独加载本模块
         generate_difference_note,
         structural_features,
     )
-    from backend.retrieval.channels import channel_scores
+    from backend.retrieval.channels import channel_scores, scores_from_fingerprints
+    from backend.retrieval.channels import build_fingerprint
+    from backend.retrieval.graphormer import graphormer_query_vector
 
 # 与 ingest canonical 同 schema 的键集——两个向量空间必须同构
 _NODE_KEYS = ("id", "kind", "label", "first_layer", "total_received_btc",
@@ -174,6 +178,14 @@ def _rrf_fuse(rankings: list[list[str]], k: int = 60) -> dict[str, float]:
     return scores
 
 
+def _counts_canon(fingerprint: dict) -> dict:
+    """指纹行的差异说明输入：generate_difference_note 只数节点/地址数。"""
+    n_addr = int(fingerprint.get("n_addr") or 0)
+    n_tx = int(fingerprint.get("n_nodes") or 0) - n_addr
+    return {"nodes": [{"kind": "address"}] * n_addr
+            + [{"kind": "transaction"}] * max(n_tx, 0)}
+
+
 class Retriever:
     """进程内检索服务（无独立 HTTP 端点，backend 直接调用）。"""
 
@@ -201,19 +213,57 @@ class Retriever:
         if not canon.get("nodes"):
             return RetrievalResult()  # RT-18：空子图 → 明确的无匹配信号
 
-        svec = structural_features(canon)
-        evec = self._embed_canonical(canon)
-        verify_embedding_model_lock(self.session, self.settings.embedding_model)
-
         recall_limit = self.settings.retrieval_recall_limit
-        recalled = self._hybrid_recall(svec, evec,
-                                       exclude_ids=exclude_ids or [],
-                                       limit=recall_limit)
+        # 主路径：Graphormer 查询向量（基准 cos 通道）→ pgvector cosine 召回。
+        # 覆盖不足（live 新地址不在 ego 语料）时回退文本/结构 hybrid 召回
+        qvec = graphormer_query_vector(canon)
+        if qvec is not None:
+            recalled = self._graphormer_recall(
+                qvec, exclude_ids=exclude_ids or [], limit=recall_limit)
+        else:
+            svec = structural_features(canon)
+            evec = self._embed_canonical(canon)
+            verify_embedding_model_lock(self.session, self.settings.embedding_model)
+            recalled = self._hybrid_recall(svec, evec,
+                                           exclude_ids=exclude_ids or [],
+                                           limit=recall_limit)
         if not recalled:
             return RetrievalResult()
 
         notify("wl_rerank")
         return self._rerank(canon, recalled, k or self.settings.retrieval_top_k)
+
+    # -- 召回 -------------------------------------------------------------
+    def _graphormer_recall(self, qvec, *, exclude_ids: list[str],
+                           limit: int) -> list[dict]:
+        """Graphormer pooled cosine 精确召回 Top-N（基准 stage1）。
+
+        9,346 行规模下精确扫描即可（HNSW 近似可能漏掉边界候选），
+        显式关掉 indexscan 走全表 cosine——基准协议要求全索引 top-500。
+        """
+        sql = text("""
+            SET LOCAL enable_indexscan = off
+        """)
+        self.session.execute(sql)
+        sql = text("""
+            SELECT id, name, source, provenance, description, evidence_grade,
+                   retrieval_fingerprint,
+                   1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS graphormer_sim,
+                   1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS struct_sim,
+                   0.0 AS sem_sim,
+                   1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS dist
+            FROM patterns
+            WHERE graphormer_embedding IS NOT NULL
+              AND id NOT IN :excluded
+            ORDER BY graphormer_embedding <=> CAST(:gv AS vector)
+            LIMIT :limit
+        """).bindparams(bindparam("excluded", expanding=True))
+        rows = self.session.execute(sql, {
+            "gv": str([round(float(x), 8) for x in qvec]),
+            "excluded": exclude_ids or [""],
+            "limit": limit,
+        }).mappings().all()
+        return [dict(r) for r in rows]
 
     def _embed_canonical(self, canon: dict) -> list[float]:
         # 描述文本与入库侧共用同一实现（features.describe_subgraph），
@@ -303,10 +353,20 @@ class Retriever:
             raise ValueError(
                 "channel_w_align>0 需要节点 embedding 语料（P2 未接入）")
         w_sum = w_cos + w_wljac + w_fp + w_ov or 1.0
+        # 查询指纹一次构建（循环内复用；召回行有指纹列即走指纹路径）
+        query_fingerprint = build_fingerprint(
+            query_canon.get("nodes") or [], query_canon.get("edges") or [])
         scored: list[tuple[float, float, float, float, dict]] = []
         for row in recalled:
-            cand_canon = row["canonical_subgraph"] or {"nodes": [], "edges": []}
-            chans = channel_scores(query_canon, cand_canon, iterations=iterations)
+            qfp_raw = row.get("retrieval_fingerprint")
+            if qfp_raw is not None:
+                # 指纹路径（graphormer 数据源）：通道分从预计算指纹算，
+                # canonical JSONB 不回传
+                chans = scores_from_fingerprints(query_fingerprint, qfp_raw)
+                cand_canon = _counts_canon(row["retrieval_fingerprint"])
+            else:
+                cand_canon = row["canonical_subgraph"] or {"nodes": [], "edges": []}
+                chans = channel_scores(query_canon, cand_canon, iterations=iterations)
             wl = chans["wljac"]
             fp = chans["fp"]
             ov = chans["ov"]
@@ -317,7 +377,10 @@ class Retriever:
         scored.sort(key=lambda t: (-t[0], t[4]["id"]))
         candidates = []
         for final, wl, fp, ov, row in scored[:k]:
-            cand_canon = row["canonical_subgraph"] or {"nodes": [], "edges": []}
+            if row.get("retrieval_fingerprint") is not None:
+                cand_canon = {}
+            else:
+                cand_canon = row["canonical_subgraph"] or {"nodes": [], "edges": []}
             candidates.append(PatternCandidate(
                 pattern_id=row["id"],
                 name=row["name"],

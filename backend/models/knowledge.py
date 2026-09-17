@@ -46,6 +46,11 @@ class Pattern(Base):
     # 向量由 compute_embeddings.py 二段填充；入库脚本先写行、后补向量
     structural_features = Column(Vector(20))
     semantic_embedding = Column(Vector(1024))
+    # graphormer_v2 数据源：benchmark cos 通道的 784 维 pooled 向量
+    # （[768d 池化 | 16 标量 z]，L2 归一化）——load_graphormer_candidates 直写
+    graphormer_embedding = Column(Vector(784))
+    # 检索指纹（channels.build_fingerprint 产物）：rerank 用，免回传 canonical
+    retrieval_fingerprint = Column(JSONB)
     embedding_model = Column(String(100), default="", nullable=False)
     embedding_dim = Column(Integer)
     wl_fingerprint = Column(JSONB)
@@ -72,6 +77,9 @@ class PatternNegative(Base):
     canonical_subgraph = Column(JSONB, nullable=False)
     structural_features = Column(Vector(20))
     semantic_embedding = Column(Vector(1024))
+    graphormer_embedding = Column(Vector(784))
+    # 检索指纹（channels.build_fingerprint 产物）：rerank 用，免回传 canonical
+    retrieval_fingerprint = Column(JSONB)
     embedding_model = Column(String(100), default="", nullable=False)
     embedding_dim = Column(Integer)
     wl_fingerprint = Column(JSONB)

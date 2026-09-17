@@ -10,8 +10,21 @@ benchmark_unseen_sim.py（业务级 unseen-similarity leave-one-out 基准）。
 """
 import pytest
 
-from backend.retrieval.channels import fp_channel, ov_channel, wl_channel
+from backend.retrieval.channels import channel_scores
 from ingest.common import CLOSURE_MAX_DEPTH, CLOSURE_NODE_CAP, _node_dict, slice_by_seed
+
+
+# channels 已重构为单一指纹代码路径，canonical 版本为入口包装
+def fp_channel(a, b):
+    return channel_scores(a, b)["fp"]
+
+
+def ov_channel(a, b):
+    return channel_scores(a, b)["ov"]
+
+
+def wl_channel(a, b):
+    return channel_scores(a, b)["wljac"]
 
 
 # ---------------------------------------------------------------------------

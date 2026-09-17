@@ -13,9 +13,15 @@ benchmark_unseen_sim.py（业务级 unseen-similarity leave-one-out 基准）的
   ov   : 地址成员重叠 |q∩c| / min(|q|,|c|)——同一轮 CoinJoin 的参与者
          地址必然重合，是「同源案例」的业务级证据（基准报告 §5）
 
-cos 通道 = stage1 混合召回分（结构+语义 cosine），由 retriever 直接取用。
-align 通道需要节点级 embedding 语料（基准用 graphormer ego embedding），
-生产侧未接入：权重 >0 时显式报错，防止静默降级为全 0 通道。
+实现为单一指纹代码路径（build_fingerprint → scores_from_fingerprints），
+canonical 版本只是入口包装——避免两份实现漂移。指纹可 JSON 序列化、
+ingest 时预计算入库（retrieval_fingerprint 列），rerank 无需回传
+大体积 canonical JSONB。
+
+cos 通道 = stage1 召回分（Graphormer pooled cosine），retriever 直接取用。
+align 通道需要节点级 embedding 语料（基准用 graphormer ego embedding，
+查询侧已由 retrieval.graphormer 提供成员向量；候选侧 per-node 对齐分
+未预计算）——权重 >0 时由 retriever 显式报错。
 """
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ import math
 from collections import Counter, defaultdict
 
 WL_ROUND_WEIGHTS = (0.1, 0.2, 0.3, 0.4)
+WL_ITERS = 4
 
 
 def _num(v) -> float:
@@ -53,6 +60,10 @@ def _utxo_bucket(u: float) -> int:
     return min(int(math.log10(u)) + 1, 6)
 
 
+def _hkey(s: str) -> str:
+    return hashlib.sha1(str(s).encode()).hexdigest()[:15]
+
+
 def _addr_label(n: dict) -> str:
     recv = _num(n.get("total_received_btc"))
     sent = _num(n.get("total_sent_btc"))
@@ -77,23 +88,6 @@ def _tx_labels(edges: list[dict]) -> dict[str, str]:
     return {f"tx:{txid}": f"tx|I{ni}|O{no}" for txid, (ni, no) in io.items()}
 
 
-def _multiset_jaccard(a: Counter, b: Counter) -> float:
-    inter = sum((a & b).values())
-    union = sum((a | b).values())
-    return inter / union if union else 0.0
-
-
-def _sorted_ctri(counter: Counter) -> list[tuple[str, int]]:
-    return sorted(counter.items())
-
-
-def _ajac(a: list[tuple[str, int]], b: list[tuple[str, int]]) -> float:
-    da, db = dict(a), dict(b)
-    inter = sum(min(v, db.get(k, 0)) for k, v in da.items())
-    union = sum(da.values()) + sum(db.values()) - inter
-    return inter / union if union else 0.0
-
-
 def _adjacency(edges: list[dict]):
     """方向感知邻接：nout/nin 分开维护（基准 WL 的方向感知核心）。"""
     nout: dict[str, list[str]] = defaultdict(list)
@@ -113,8 +107,8 @@ def _payload(nid: str, nout, nin, labels: dict[str, str]) -> str:
     return f"{labels.get(nid, '?')}|O[{no_}]|I[{ni_}]"
 
 
-def _wl_counters(nodes: list[dict], edges: list[dict],
-                 iterations: int) -> list[Counter]:
+def _wl_multilists(nodes: list[dict], edges: list[dict]) -> list[list[tuple[str, int]]]:
+    """各轮子树标签多重集 → 排序 [hash, count]（ctri 同构，可 JSON 序列化）。"""
     labels: dict[str, str] = {}
     for n in nodes:
         if n.get("kind") == "transaction":
@@ -128,59 +122,20 @@ def _wl_counters(nodes: list[dict], edges: list[dict],
     nout, nin = _adjacency(edges)
     counters = []
     cur = dict(labels)
-    for i in range(iterations):
+    for i in range(WL_ITERS):
         c: Counter = Counter()
         for nid in labels:
             c[_payload(nid, nout, nin, cur)] += 1
         counters.append(c)
-        if i < iterations - 1:
+        if i < WL_ITERS - 1:
             cur = {nid: hashlib.sha1(
                 _payload(nid, nout, nin, cur).encode()).hexdigest()[:16]
                 for nid in cur}
-    return counters
+    return [[(_hkey(k), v) for k, v in sorted(c.items())] for c in counters]
 
 
-def wl_channel(query: dict, cand: dict, iterations: int = 4) -> float:
-    """方向感知 WL 子树标签 Jaccard（轮权递增）。"""
-    qn, qe = query.get("nodes") or [], query.get("edges") or []
-    cn, ce = cand.get("nodes") or [], cand.get("edges") or []
-    if not qn and not cn:
-        return 1.0
-    if not qn or not cn:
-        return 0.0
-    iters = min(iterations, len(WL_ROUND_WEIGHTS))
-    qc = _wl_counters(qn, qe, iters)
-    cc = _wl_counters(cn, ce, iters)
-    total = 0.0
-    for i in range(iters):
-        total += WL_ROUND_WEIGHTS[i] * _multiset_jaccard(qc[i], cc[i])
-    return total / sum(WL_ROUND_WEIGHTS[:iters])
-
-
-def _count_vector(canon: dict) -> list[int]:
-    """基准 fp 的 9 维计数向量：[stop_l1..4, 节点数, 边数, stop 总数, 跨链数]。"""
-    edges = canon.get("edges") or []
-    nodes = canon.get("nodes") or []
+def _fp_parts(nodes: list[dict], edges: list[dict]) -> tuple[Counter, Counter, Counter, list[int]]:
     by_id = {n.get("id"): n for n in nodes}
-    cv = [0] * 9
-    n_stopped = n_cross = 0
-    for e in edges:
-        if e.get("is_stopped_expansion"):
-            src = by_id.get(e.get("source"), {})
-            cv[min(_int(src.get("first_layer")) + 1, 4)] += 1
-            n_stopped += 1
-        if e.get("is_crosschain"):
-            n_cross += 1
-    cv[5] = len(nodes)
-    cv[6] = len(edges)
-    cv[7] = n_stopped
-    cv[8] = n_cross
-    return cv
-
-
-def _fp_parts(canon: dict):
-    edges = canon.get("edges") or []
-    nodes = canon.get("nodes") or []
     m_amt: Counter = Counter()
     m_recv: Counter = Counter()
     m_utxo: Counter = Counter()
@@ -191,34 +146,82 @@ def _fp_parts(canon: dict):
             v = _num(e.get("dst_value_btc"))
             if v > 0:
                 m_amt[round(math.log10(1 + v), 1)] += 1
+    n_addr = 0
     for n in nodes:
         if n.get("kind") != "address":
             continue
+        n_addr += 1
         m_recv[_amt_bucket(_num(n.get("total_received_btc")))] += 1
         m_utxo[_utxo_bucket(_num(n.get("utxo_count")))] += 1
-    return m_amt, m_recv, m_utxo
+    cv = [0] * 9
+    n_stopped = n_cross = 0
+    for e in edges:
+        if e.get("is_stopped_expansion"):
+            # 基准口径：计在 min(src 地址层 + 1, 4)
+            src = by_id.get(e.get("source"), {})
+            cv[min(_int(src.get("first_layer")) + 1, 4)] += 1
+            n_stopped += 1
+        if e.get("is_crosschain"):
+            n_cross += 1
+    cv[5] = len(nodes)
+    cv[6] = len(edges)
+    cv[7] = n_stopped
+    cv[8] = n_cross
+    return m_amt, m_recv, m_utxo, cv
 
 
-def fp_channel(query: dict, cand: dict) -> float:
+def build_fingerprint(nodes: list[dict], edges: list[dict]) -> dict:
+    """检索指纹：wljac/fp/ov 三通道的全部输入，JSON 可序列化。
+
+    keys：wl（4 轮 [hash,count] 多重集）/ amt / recv / utxo（multiset dict，
+    str keys）/ cv（9 维计数向量）/ addrs（排序地址标签）/ n_nodes / n_addr
+    """
+    m_amt, m_recv, m_utxo, cv = _fp_parts(nodes, edges)
+    addr_labels = sorted(n.get("label") for n in nodes
+                         if n.get("kind") == "address" and n.get("label"))
+    return {
+        "wl": _wl_multilists(nodes, edges),
+        "amt": {str(k): v for k, v in sorted(m_amt.items())},
+        "recv": {str(k): v for k, v in sorted(m_recv.items())},
+        "utxo": {str(k): v for k, v in sorted(m_utxo.items())},
+        "cv": cv,
+        "addrs": addr_labels,
+        "n_nodes": len(nodes),
+        "n_addr": len(addr_labels),
+    }
+
+
+def _multiset_jaccard(a, b) -> float:
+    da = dict(a) if not isinstance(a, dict) else a
+    db = dict(b) if not isinstance(b, dict) else b
+    inter = sum(min(v, db.get(k, 0)) for k, v in da.items())
+    union = sum(da.values()) + sum(db.values()) - inter
+    return inter / union if union else 0.0
+
+
+def wl_score(qf: dict, cf: dict) -> float:
+    """方向感知 WL 子树标签 Jaccard（轮权递增）。"""
+    qw, cw = qf["wl"], cf["wl"]
+    total = 0.0
+    for i in range(WL_ITERS):
+        total += WL_ROUND_WEIGHTS[i] * _multiset_jaccard(qw[i], cw[i])
+    return total / sum(WL_ROUND_WEIGHTS)
+
+
+def fp_score(qf: dict, cf: dict) -> float:
     """金额/收款/UTXO 多重集 Jaccard + 计数向量亲近度（各占 1/4）。"""
-    q_amt, q_recv, q_utxo = _fp_parts(query)
-    c_amt, c_recv, c_utxo = _fp_parts(cand)
-    qcv, ccv = _count_vector(query), _count_vector(cand)
-    qsum, csum = sum(qcv), sum(ccv)
-    cv_sim = 1.0 - sum(abs(a - b) for a, b in zip(qcv, ccv)) / max(qsum + csum, 1)
-    return (_ajac(_sorted_ctri(q_amt), _sorted_ctri(c_amt))
-            + _ajac(_sorted_ctri(q_recv), _sorted_ctri(c_recv))
-            + _ajac(_sorted_ctri(q_utxo), _sorted_ctri(c_utxo))
+    cv_sim = 1.0 - sum(abs(a - b) for a, b in zip(qf["cv"], cf["cv"])) / max(
+        sum(qf["cv"]) + sum(cf["cv"]), 1)
+    return (_multiset_jaccard(qf["amt"], cf["amt"])
+            + _multiset_jaccard(qf["recv"], cf["recv"])
+            + _multiset_jaccard(qf["utxo"], cf["utxo"])
             + cv_sim) / 4.0
 
 
-def ov_channel(query: dict, cand: dict) -> float:
+def ov_score(qf: dict, cf: dict) -> float:
     """地址成员重叠 |q∩c| / min(|q|,|c|)（软包含，±20% 剪叶稳定）。"""
-    def addr_labels(canon):
-        return {n.get("label") for n in (canon.get("nodes") or [])
-                if n.get("kind") == "address" and n.get("label")}
-
-    qs, cs = addr_labels(query), addr_labels(cand)
+    qs = set(qf["addrs"])
+    cs = set(cf["addrs"])
     if not qs and not cs:
         return 1.0
     if not qs or not cs:
@@ -226,10 +229,18 @@ def ov_channel(query: dict, cand: dict) -> float:
     return len(qs & cs) / max(min(len(qs), len(cs)), 1)
 
 
+def scores_from_fingerprints(qf: dict, cf: dict) -> dict:
+    return {"wljac": wl_score(qf, cf), "fp": fp_score(qf, cf),
+            "ov": ov_score(qf, cf)}
+
+
 def channel_scores(query: dict, cand: dict, iterations: int = 4) -> dict:
-    """一次算齐三个结构通道（rerank 内循环调用）。"""
-    return {
-        "wljac": wl_channel(query, cand, iterations=iterations),
-        "fp": fp_channel(query, cand),
-        "ov": ov_channel(query, cand),
-    }
+    """canonical dict 入口（build_fingerprint 两侧 → 三通道分数）。"""
+    qn, qe = query.get("nodes") or [], query.get("edges") or []
+    cn, ce = cand.get("nodes") or [], cand.get("edges") or []
+    if not qn and not cn:
+        return {"wljac": 1.0, "fp": 1.0, "ov": 1.0}
+    if not qn or not cn:
+        return {"wljac": 0.0, "fp": 0.0, "ov": 0.0}
+    return scores_from_fingerprints(build_fingerprint(qn, qe),
+                                    build_fingerprint(cn, ce))
