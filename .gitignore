@@ -45,4 +45,10 @@ docs/production-runbook.md
 demos/
 
 # 种子数据（与 DB 同类：本地运行数据，不入库；CSV 源自外部归因清单 ~/Downloads）
-ingest/seed/
+# 例外：graphormer_v2/derived 是检索查询侧运行时依赖（graphormer.py 顶层
+# np.load），单测和 docker 运行时都需要，必须入库（~31MB，单文件 <=17MB）
+ingest/seed/*
+!ingest/seed/graphormer_v2/
+ingest/seed/graphormer_v2/*
+!ingest/seed/graphormer_v2/derived/
+# parquet 原始语料（594MB edges / 97MB nodes）仍不入库：仅 ingest 建 DB 用
