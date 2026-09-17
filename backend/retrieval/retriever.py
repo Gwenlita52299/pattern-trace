@@ -251,7 +251,7 @@ class Retriever:
                    1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS graphormer_sim,
                    1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS struct_sim,
                    0.0 AS sem_sim,
-                   1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS dist
+                   (graphormer_embedding <=> CAST(:gv AS vector)) AS dist
             FROM patterns
             WHERE graphormer_embedding IS NOT NULL
               AND id NOT IN :excluded

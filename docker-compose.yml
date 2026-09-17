@@ -66,6 +66,10 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - ESPLORA_API_URL=${ESPLORA_API_URL:-https://mempool.space/api}
+      # 出站 HTTP 走宿主机代理（httpx trust_env 自动拾取）；NO_PROXY 保护内网
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
       # RT-04 模型锁：容器内 provider 配置必须与 DB 已写入向量的模型一致
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-stub}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-liquid/lfm-2.5-embedding-350m}
@@ -83,6 +87,8 @@ services:
     volumes:
       # issue #22：报告文件由 worker 写、API 读，必须共享持久化存储
       - report_files:/app/output/reports
+      # graphormer_v2 检索数据（pooled/ego npz）：retriever 查询侧必需
+      - ./ingest/seed/graphormer_v2:/app/ingest/seed/graphormer_v2:ro
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
       interval: 5s
@@ -111,6 +117,10 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - ESPLORA_API_URL=${ESPLORA_API_URL:-https://mempool.space/api}
+      # 出站 HTTP 走宿主机代理（httpx trust_env 自动拾取）；NO_PROXY 保护内网
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
       # worker 内 orchestration 跑 Retriever，embedding 配置必须与 backend 一致
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-stub}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-liquid/lfm-2.5-embedding-350m}
@@ -121,6 +131,8 @@ services:
       - REPORTS_DIR=/app/output/reports
     volumes:
       - report_files:/app/output/reports
+      # graphormer_v2 检索数据（pooled/ego npz）：orchestration 检索必需
+      - ./ingest/seed/graphormer_v2:/app/ingest/seed/graphormer_v2:ro
     command: arq workers.worker.WorkerSettings
     healthcheck:
       test: ["CMD-SHELL", "arq --check workers.worker.WorkerSettings"]
