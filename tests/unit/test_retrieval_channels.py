@@ -405,6 +405,30 @@ class TestChannelComboRerank:
         for forbidden in ("w_cos", "w_ov", "w_wljac", "w_fp", "weights"):
             assert forbidden not in sig
 
+    def test_ov_tie_secondary_order_follows_similarity(self):
+        """ov 并列时次级排序必须由 cos 相似度决定（0908c05 反转 bug 回归测试）。
+
+        构造：两个召回行 ov/wl 完全相同（同一 canonical），仅 stage1 距离
+        dist 不同——修复前 dist 被误写为相似度，次级排序方向相反。
+        """
+        same_canon = _chain_canon(6)
+        base = {"id": "x", "name": "n", "description": "",
+                "evidence_grade": "A", "source": "lazarus_confirmed",
+                "provenance": "confirmed", "canonical_subgraph": same_canon,
+                "struct_sim": 0.0, "sem_sim": 0.0}
+        near = {**base, "id": "near", "dist": 0.05}   # cos 相似度 0.95
+        far = {**base, "id": "far", "dist": 0.80}     # cos 相似度 0.20
+        result = Retriever(FakeSession([far, near]), FakeSettings()).retrieve(
+            _chain_canon(6))
+        ids = [c.pattern_id for c in result.candidates]
+        assert ids[0] == "near"
+        # 数学校验：final = 0.1·sim + 0.1·wl + 0.8·ov，ov/wl 相同时仅 sim 生效
+        near_c = next(c for c in result.candidates if c.pattern_id == "near")
+        far_c = next(c for c in result.candidates if c.pattern_id == "far")
+        assert near_c.similarity_score > far_c.similarity_score
+        assert near_c.similarity_score - far_c.similarity_score == \
+            pytest.approx(0.1 * (0.95 - 0.20), abs=1e-3)
+
     def test_canonical_conversion_carries_flag_keys(self):
         """SubgraphResult → canonical：三级标签键集与 ingest 同构。"""
         from types import SimpleNamespace as NS
