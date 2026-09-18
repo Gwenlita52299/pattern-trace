@@ -102,6 +102,7 @@ LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture uv run python tests/evaluation/run_e2e
 | `LLM_BASE_URL` | 默认 `https://api.deepseek.com`；llama.cpp 为 `http://llamacpp:8080/v1` |
 | `GRAPH_DATA_MODE` | `fixture`（内置演示图，离线）/ `live`（Esplora 公网） |
 | `ESPLORA_API_URL` | live 数据源，默认 `https://mempool.space/api`（自动切 Blockstream 备用） |
+| `ADDRESS_TX_COUNT_LIMIT` | live 模式地址活跃度预检阈值（默认 200）：analyze 建图前查 `/address/:addr/stats` 的 tx_count，超过即 422 `ADDRESS_TOO_ACTIVE`（issue #79） |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | 出站 HTTP 代理（httpx `trust_env` 自动拾取）；`NO_PROXY` 保护容器内网流量。受限网络下 live 模式访问公网 Esplora 必需；`NO_PROXY` 默认 `localhost,127.0.0.1` |
 | `DEMO_SEEDS` | 匿名免登录白名单地址 CSV；空则用 fixture 内置 seed |
 | `CORS_ORIGINS` | CORS 显式白名单 CSV；默认放行 `localhost:3000`（同源代理形态下仅直连后端时需要），生产注入正式域名 |

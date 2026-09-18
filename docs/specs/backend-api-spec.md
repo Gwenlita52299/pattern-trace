@@ -129,6 +129,11 @@ Validation:
 - address: BTC checksum 级校验（base58check / bech32 polymod，非正则）；长度 ≤ 62 字符
 - hops: int, **1–3**, default 3（D6：与 BFS 三队列及特征向量维度一致，>3 返回 422）
 - time_window_days: int, 7–365, default 90
+- **地址活跃度预检（issue #79，仅 live 模式）**：建图前先请求 `GET /address/:addr/stats`
+  （单请求，Redis L2 缓存 24h）读取 `tx_count`；超过 `ADDRESS_TX_COUNT_LIMIT`
+  （默认 200）直接 422 `ADDRESS_TOO_ACTIVE`，不落库不入队。预检失败
+  （Esplora 不可达）放行（fail-open）：分页截断（issue #25）与 job timeout
+  兜底仍是第二道防线。拒绝经审计中间件落 audit_logs（action=analyze, failure）
 
 **成本控制（匿名滥用防护）**：
 - 免登录仅允许 `DEMO_ADDRESSES` 白名单内地址（env 配置）

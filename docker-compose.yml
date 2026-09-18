@@ -66,6 +66,8 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
       - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
       - ESPLORA_API_URL=${ESPLORA_API_URL:-https://mempool.space/api}
+      # issue #79：live 模式 analyze 入口地址活跃度预检阈值（仅 backend 需要）
+      - ADDRESS_TX_COUNT_LIMIT=${ADDRESS_TX_COUNT_LIMIT:-200}
       # 出站 HTTP 走宿主机代理（httpx trust_env 自动拾取）；NO_PROXY 保护内网
       - HTTP_PROXY=${HTTP_PROXY:-}
       - HTTPS_PROXY=${HTTPS_PROXY:-}

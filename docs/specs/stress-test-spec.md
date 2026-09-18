@@ -146,6 +146,7 @@ curl -f http://localhost:8000/healthz   # 就绪检查
 1. 匿名 analyze 打非白名单地址 → 预期 403
 2. 匿名 analyze 打白名单地址直至超配额 → 预期 429 + `Retry-After`
 3. 高频失败登录 → 预期 429（SEC-05 爆破防护在压力下生效）
+4. 登录用户 analyze 高活跃地址（live 模式，`tx_count` 超过 `ADDRESS_TX_COUNT_LIMIT`）→ 预期 422 `ADDRESS_TOO_ACTIVE`（issue #79 预检在压测下不成为新增瓶颈——stats 响应经 Redis L2 缓存）
 
 **预期结果**
 - 三类预期拒绝状态码与语义正确，**无 5xx 泄漏**（限流实现本身在高并发下不崩）

@@ -226,6 +226,43 @@ def _check_anon_limits(ip: str, settings) -> tuple[str | None, int]:
     return None, 0
 
 
+# ---- 地址活跃度预检（issue #79）----
+def _precheck_address_activity(address: str, settings) -> None:
+    """高活跃地址建图前拦截：chain tx_count 超 ADDRESS_TX_COUNT_LIMIT 即 422。
+
+    - 仅 live 模式执行（fixture 是确定性演示图，无真实活跃度概念）
+    - 预检本身失败（Esplora 不可达）放行而非拒绝：分页截断（issue #25）
+      与 job timeout 兜底仍是第二道防线，预检不应成为分析的单点故障
+    - 拒绝与预检失败均 print 留痕；4xx 响应由审计中间件按
+      action=analyze / action_result=failure 落 audit_logs
+    """
+    if settings.graph_data_mode != "live":
+        return
+    from ..graph_builder.data_source import LiveEsploraProvider, _sync_redis
+
+    provider = LiveEsploraProvider(settings.esplora_api_url,
+                                   redis_client=_sync_redis())
+    try:
+        stats = provider.address_stats(address)
+    except Exception as exc:  # noqa: BLE001 — fail-open，见 docstring
+        print(f"[precheck] address stats unavailable "
+              f"({exc.__class__.__name__}); allowing {address[:12]}…")
+        return
+    tx_count = (stats or {}).get("tx_count")
+    if tx_count is None:
+        return
+    if tx_count > settings.address_tx_count_limit:
+        print(f"[precheck] rejected {address[:12]}…: tx_count={tx_count} "
+              f"> limit={settings.address_tx_count_limit}")
+        raise ProblemError(
+            422,
+            f"address has {tx_count} historical transactions, exceeding the "
+            f"analysis limit ({settings.address_tx_count_limit}); building "
+            "a subgraph for this address would generate excessive upstream "
+            "requests",
+            "ADDRESS_TOO_ACTIVE")
+
+
 def _demo_seeds(settings) -> list[str]:
     seeds = settings.demo_seeds_list
     if seeds:
@@ -625,6 +662,14 @@ def create_app() -> FastAPI:
         from ..models.base import Judgment
         from ..services.orchestration import reclaim_zombies
         from ..services.task_queue import dispatch_analysis
+
+        # issue #79：高活跃地址预检（单次 /address/:addr/stats 请求）——
+        # 建图前拦截，避免高活跃地址进入 BFS 后产生数万次 Esplora 请求
+        # 占满 worker；阻塞调用放线程池，不卡事件循环
+        from fastapi.concurrency import run_in_threadpool
+
+        await run_in_threadpool(_precheck_address_activity,
+                                body.address, settings)
 
         # 顺带回收僵尸任务（BE-40）：无专用定时进程时的低成本替代
         with Session(get_db_engine()) as session:

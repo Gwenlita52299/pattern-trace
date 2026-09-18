@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     esplora_api_url: str = "https://mempool.space/api"
     # issue #25：live 模式地址历史分页硬上限（页 × Esplora 页大小 25）
     esplora_max_pages: int = 40
+    # issue #79：地址活跃度预检阈值——live 模式 analyze 入口先查
+    # /address/:addr/stats 的 tx_count，超过即 422 拒绝（建图前拦截，
+    # 避免高活跃地址进入 BFS 后产生数万次 outspend/get_tx 上游请求）
+    address_tx_count_limit: int = 200
     demo_seeds: str = ""                 # 匿名白名单地址 CSV；空则用 fixture 内 seed
     zombie_timeout_seconds: int = 120    # 进行中任务超时回收阈值（BE-40）
 

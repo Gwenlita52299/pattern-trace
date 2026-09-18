@@ -310,6 +310,16 @@ class LiveEsploraProvider:
                  if t.block_time is not None]
         return max(times) if times else None
 
+    def address_stats(self, address: str) -> dict:
+        """地址统计单请求预检（issue #79：GET /address/:addr/stats）。
+
+        返回含 tx_count（地址涉及交易总数）等字段。与分页枚举共享
+        _fetch 的 Redis L2 缓存与重试/熔断层——预检一次 HTTP 即可
+        在建图前判断活跃度，避免高活跃地址进入 BFS 后产生
+        数万次 outspend/get_tx 上游请求。
+        """
+        return self._fetch(f"/address/{address}/stats")
+
     # ------------------------------------------------------------------
     def _fetch(self, path: str) -> object:
         redis_key = f"esplora:{self.base_url}:{path}"
