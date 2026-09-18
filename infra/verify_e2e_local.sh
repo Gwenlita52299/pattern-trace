@@ -30,6 +30,9 @@ done
 COMPOSE=(docker compose -p "$PROJ" -f docker-compose.yml -f infra/compose.e2e.yml)
 export DATABASE_URL="postgresql://pt:pt@localhost:15433/pt_e2e"
 export REDIS_URL="redis://localhost:16380/1"
+# compose 插值需要（主文件 ${JWT_SECRET:?}）；override 文件的字面值不参与插值。
+# 本地宿主 .env 存在时不依赖它，CI 从这里拿
+export JWT_SECRET="${JWT_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
 export BOOTSTRAP_ADMIN_EMAIL=e2e-admin@patterntrace.test
 export BOOTSTRAP_ADMIN_PASSWORD=E2eAdminPass123!
 
