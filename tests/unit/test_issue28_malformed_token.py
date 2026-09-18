@@ -38,6 +38,8 @@ def _hmac(header: str, payload_raw: bytes, secret: str) -> bytes:
 def client(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", TEST_JWT_SECRET)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
+    # 钉住 fixture：本地 .env 若为 live，单测会走真实 Esplora（与 test_backend_api 对齐）
+    monkeypatch.setenv("GRAPH_DATA_MODE", "fixture")
     reset_settings()
     reset_stores()
     c = TestClient(create_app())

@@ -47,6 +47,8 @@ requires_db = pytest.mark.skipif(
 def api_client(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
+    # 钉住 fixture：本地 .env 若为 live，单测会走真实 Esplora（与 test_backend_api 对齐）
+    monkeypatch.setenv("GRAPH_DATA_MODE", "fixture")
     monkeypatch.delenv("LLM_MOCK_SCENARIO", raising=False)
     reset_settings()
     reset_stores()
