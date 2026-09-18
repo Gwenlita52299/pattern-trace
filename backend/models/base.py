@@ -139,6 +139,9 @@ class JudgmentEvent(Base):
                          nullable=False, index=True)
     from_status = Column(String(20))
     to_status = Column(String(20), nullable=False)
+    # issue #78：阶段/检索摘要观测点——retrieval 候选快照、分析阶段记录
+    # （HTTP 轮询会跳过快阶段，Redis 只存当前值，顺序只能靠持久化行）
+    detail = Column(JSONB)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -210,6 +213,10 @@ class Judgment(Base):
     # 数据质量（issue #8）：部分上游分支失败时保留部分子图并标记 degraded/需人工复核
     data_quality = Column(String(20), default="complete", nullable=False)
     requires_manual_review = Column(Boolean, default=False, nullable=False)
+
+    # issue #78：mock provider 的 per-judgment 场景（E2E HTTP 模式的
+    # worker 故障注入通道；仅 LLM_PROVIDER=mock 时经 API 写入）
+    mock_scenario = Column(String(100))
 
     created_by = Column(String(36), ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())

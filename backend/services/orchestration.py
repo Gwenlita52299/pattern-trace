@@ -59,9 +59,24 @@ class DataSourceUnavailable(RuntimeError):
 
 
 def _record_event(session, judgment_id: str, from_status: str | None,
-                  to_status: str) -> None:
+                  to_status: str, detail: dict | None = None) -> None:
     session.add(JudgmentEvent(judgment_id=judgment_id,
-                              from_status=from_status, to_status=to_status))
+                              from_status=from_status, to_status=to_status,
+                              detail=detail))
+
+
+def _record_stage(session, judgment_id: str, stage: str) -> None:
+    """issue #78：分析阶段的持久化观测点。
+
+    Redis `_report_stage` 只存「当前值」且 HTTP 轮询会跳过快阶段，
+    阶段顺序的验收依据是 judgment_events 的持久化行序。
+    best-effort：失败只告警，不阻塞管线（与 _report_stage 同级容忍）。
+    """
+    try:
+        _record_event(session, judgment_id, None, f"stage:{stage}")
+        session.commit()
+    except Exception as exc:  # noqa: BLE001 — 观测绝不阻塞主流程
+        print(f"[orchestration] stage event {stage} not persisted ({exc!r})")
 
 
 def _report_stage(judgment_id: str, stage: str, settings) -> None:
@@ -248,12 +263,29 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     retriever = Retriever(session, settings)
     # issue #40：阶段 2/4 混合检索 Top-K、3/4 WL kernel 精排由 retriever 内部回调上报
     retrieval = retriever.retrieve(
-        canon, notify=lambda stage: _report_stage(row.id, stage, settings))
+        canon, notify=lambda stage: (
+            _report_stage(row.id, stage, settings),
+            _record_stage(session, row.id, stage)))
+
+    # issue #78：检索有效性观测点——本次召回/精排返回的候选快照落库，
+    # E2E 断言 matched_pattern ∈ 候选名集合的依据（轮询响应不含候选列表）
+    _record_event(session, row.id, None, "stage:retrieval_done", detail={
+        "candidates": [{"id": c.pattern_id, "name": c.name,
+                        "score": c.similarity_score}
+                       for c in retrieval.candidates],
+        "kb_candidate_count": len(retrieval.candidates),
+    })
+    session.commit()
 
     judge = LLMJudge(client=get_llm_client(settings),
                      cache=_judgment_cache(settings))
+    # issue #78：per-judgment mock 场景（E2E HTTP 模式经请求字段注入；
+    # 仅 mock provider 下该列非空，真实 provider 不受影响）
+    if settings.llm_provider == "mock" and row.mock_scenario:
+        judge.client.scenario = row.mock_scenario
     # issue #40：阶段 4/4 — LLM 结构化判断（耗时最长，单独上报）
     _report_stage(row.id, "llm_judging", settings)
+    _record_stage(session, row.id, "llm_judging")
     verdict = None
     provider_code: str | None = None
     # issue #8：图不完整时把数据质量事实传给 LLM（谨慎判断、说明局限）

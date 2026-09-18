@@ -77,52 +77,27 @@ jobs:
   e2e:
     needs: [lint-test-backend, lint-test-frontend]
     runs-on: ubuntu-latest
+    # 完整业务闭环（issue #78）：分析→判断→子图→PDF/HTML 报告 + 独立
+    # worker 队列形态，全部在隔离 compose project 内真实走一遍
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Start services
-        run: |
-          JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
-          BOOTSTRAP_ADMIN_EMAIL=admin@patterntrace.app \
-          BOOTSTRAP_ADMIN_PASSWORD=AdminPass123! \
-          docker compose up --build -d db redis backend frontend
-          sleep 10
-      - name: Health checks
-        run: |
-          curl -f http://localhost:8000/healthz
-          curl -f http://localhost:8000/readyz
-      - name: Same-origin proxy smoke（issue #57：rewrites 回归门禁）
-        run: |
-          code=000
-          for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' \
-              http://localhost:3000/api/v1/demo/addresses)
-            [ "$code" = "200" ] && break
-            sleep 3
-          done
-          [ "$code" = "200" ] || { echo "proxy smoke expected 200 got $code"; exit 1; }
-      - name: Contract poll stability (CT-02 over HTTP)
-        run: |
-          for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' \
-              http://localhost:8000/api/v1/judgments/00000000-0000-0000-0000-000000000000)
-            [ "$code" = "404" ] || { echo "expected 404 got $code"; exit 1; }
-          done
-      - name: Auth flow smoke test
-        run: |
-          # POST /users 需 admin（require_role("admin")）——先以 bootstrap admin 登录建号。
-          # 建号幂等：已存在则 409 冲突，直接复用再登录。
-          ADMIN=$(curl -s http://localhost:8000/api/v1/auth/login \
-            -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
-            -d '{"email":"admin@patterntrace.app","password":"AdminPass123!"}' | jq -r '.access_token')
-          curl -s -o /dev/null -X POST http://localhost:8000/api/v1/users \
-            -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
-            -H "Authorization: Bearer $ADMIN" \
-            -d '{"email":"demo@patterntrace.app","password":"DemoPass123!","role":"investigator"}'
-          TOKEN=$(curl -s http://localhost:8000/api/v1/auth/login \
-            -H 'Content-Type: application/json' -H 'X-Requested-With: XMLHttpRequest' \
-            -d '{"email":"demo@patterntrace.app","password":"DemoPass123!"}' | jq -r '.access_token')
-          curl -sf http://localhost:8000/api/v1/cases -H "Authorization: Bearer $TOKEN" \
-            -H 'X-Requested-With: XMLHttpRequest'
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run full E2E (isolated compose project)
+        run: bash infra/verify_e2e_local.sh
+        timeout-minutes: 25
+      - name: Upload failure artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: /tmp/pt-e2e/
+          if-no-files-found: ignore
+          retention-days: 5
 
   perf-nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

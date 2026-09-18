@@ -44,6 +44,9 @@ class AnalyzeRequest(BaseModel):
     address: str = Field(min_length=14, max_length=62)
     hops: int = 3
     time_window_days: int = Field(default=90, ge=7, le=365)
+    # issue #78：E2E/mock 专用 mock 场景选择。仅 LLM_PROVIDER=mock 时生效；
+    # 真实 provider 下严格 422——不构成生产故障注入接口
+    mock_scenario: str | None = Field(default=None, max_length=100)
 
     @field_validator("hops")
     @classmethod
@@ -643,6 +646,13 @@ def create_app() -> FastAPI:
         if err:
             raise ProblemError(422, err, "VALIDATION_ERROR")
 
+        # issue #78：mock 场景是测试专用通道——非 mock provider 一律拒绝，
+        # 保证生产/live 形态不存在「按请求注入 LLM 故障」的接口
+        if body.mock_scenario and settings.llm_provider != "mock":
+            raise ProblemError(
+                422, "mock_scenario requires LLM_PROVIDER=mock",
+                "MOCK_SCENARIO_REQUIRES_MOCK")
+
         if user is None:
             # 免登录仅允许演示白名单（成本控制，BE-09）
             if body.address not in _demo_seeds(settings):
@@ -682,6 +692,7 @@ def create_app() -> FastAPI:
                 session.add(Judgment(
                     id=jid, address=body.address, hops=body.hops,
                     time_window_days=body.time_window_days,
+                    mock_scenario=body.mock_scenario,
                     # created_by FK 指向 users.id（与 reports 一致），存 email 会 500
                     created_by=(user or {}).get("id")))
                 session.commit()

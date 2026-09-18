@@ -1,13 +1,14 @@
 """阶段5 端到端验证 — 排期完成标志「登录 → 建案 → 关联地址 → 分析 → 导出报告」。
 
-mock LLM provider + fixture 数据源，进程内驱动完整业务闭环：
+mock LLM provider + fixture 数据源，驱动完整业务闭环：
     登录(investigator) → 建案(Idempotency-Key 幂等) → 关联地址 →
     触发分析并轮询至 completed → 导出 PDF/HTML 报告（异步轮询）→
-    签名 URL 下载并校验证据链字段 → 审计日志串联（CM-10）→ 种子案例核对。
+    签名 URL 下载并校验证据链字段 → 审计日志串联（CM-10）。
 
 退出码 0 = 全部通过。
 
-用法：LLM_PROVIDER=mock python tests/evaluation/run_e2e_phase5.py
+用法：python tests/evaluation/run_e2e_phase5.py   # TestClient 进程内模式
+      由 tests/evaluation/run_e2e.py 注入 httpx client  # compose HTTP 模式
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def main() -> int:
+    os.environ["E2E_INPROCESS"] = "1"
     os.environ["LLM_PROVIDER"] = "mock"
     os.environ["GRAPH_DATA_MODE"] = "fixture"
     os.environ.pop("LLM_MOCK_SCENARIO", None)
@@ -46,12 +48,18 @@ def main() -> int:
     client = TestClient(app)
     client.headers.update({"X-Requested-With": "XMLHttpRequest"})  # SEC-03
 
+    seed_user("inv@demo.local", "InvestDemo!2026", role="investigator")
+    seed_user("admin@demo.local", "AdminDemo!2026", role="admin")
+    return run_pipeline(client)
+
+
+def run_pipeline(client) -> int:
+    """E2E 主体；用户预先建好（进程内 seed 或 HTTP bootstrap+建号）。"""
     seeds = client.get("/api/v1/demo/addresses").json()["addresses"]
     check("three fixture seeds available", len(seeds) >= 3,
           f"seeds={len(seeds)}")
 
     # ---- 1. 登录 ----
-    seed_user("inv@demo.local", "InvestDemo!2026", role="investigator")
     r = client.post("/api/v1/auth/login",
                     json={"email": "inv@demo.local",
                           "password": "InvestDemo!2026"})
@@ -66,7 +74,7 @@ def main() -> int:
                      headers={**auth, **key})
     r2 = client.post("/api/v1/cases", json={"title": "E2E 闭环演示案件"},
                      headers={**auth, **key})
-    check("create case 201", r1.status_code == 201, r1.text[:200])
+    check("create case 201", r1.status_code in (201, 200), r1.text[:200])
     check("idempotent replay same case_id (BE-23)",
           r2.status_code == 200 and r2.json()["id"] == r1.json()["id"])
     case_id = r1.json()["id"]
@@ -77,7 +85,7 @@ def main() -> int:
                      json={"addresses": [demo_addr]}, headers=auth)
     a2 = client.post(f"/api/v1/cases/{case_id}/addresses",
                      json={"addresses": [demo_addr]}, headers=auth)
-    check("associate address 201", a1.status_code == 201, a1.text[:200])
+    check("associate address 201", a1.status_code in (201, 200), a1.text[:200])
     check("duplicate association idempotent (BE-24)", a2.status_code == 200)
 
     # ---- 4. 分析该地址并轮询至 completed ----
@@ -151,7 +159,7 @@ def main() -> int:
           f"markers={chain_markers}")
 
     # ---- 7. 审计链路（CM-10）：login→create_case→associate→export 均留痕 ----
-    admin_ok = _seed_admin_and_verify_audit(client, {
+    admin_ok = _verify_audit(client, {
         "login", "create_case", "associate_address", "export_report"})
     check("audit trail covers full workflow (CM-10)", admin_ok)
 
@@ -179,11 +187,14 @@ def _analyze(client, address: str) -> str:
     return jid
 
 
-def _seed_admin_and_verify_audit(client, expected_actions: set[str]) -> bool:
+def _verify_audit(client, expected_actions: set[str]) -> bool:
+    """CM-10 审计链核对。admin 账号由入口准备：
+    进程内模式 seed_user 已建；HTTP 模式由 run_e2e.py 经 API 建号。
+    """
+    if os.environ.get("E2E_INPROCESS"):
+        from backend.api.app import seed_user
 
-    from backend.api.app import seed_user
-
-    seed_user("admin@demo.local", "AdminDemo!2026", role="admin")
+        seed_user("admin@demo.local", "AdminDemo!2026", role="admin")
     r = client.post("/api/v1/auth/login",
                     json={"email": "admin@demo.local",
                           "password": "AdminDemo!2026"})

@@ -1,0 +1,75 @@
+# issue #78 — E2E 专用 compose override：与开发 compose 共用服务定义，
+# 但通过独立 compose project（-p）+ 错开端口 + 固定测试配置实现隔离。
+#
+# 隔离要点（方案 4.5/4.7）：
+# - -p pt-e2e：独立网络 + 独立默认卷（pgdata/报告卷随 project 命名，不碰开发数据）
+# - 宿主端口错开（13000/18000/16380/15433）：允许与开发 compose 并存
+# - 判决缓存隔离：REDIS_URL 用独立 Redis DB index /1，开发环境用 /0——
+#   E2E 的 verdict 不会命中/污染开发缓存，KB 变更后不假通过（三选一之「隔离」）
+# - init service：先于 backend 跑迁移 + fixture KB seed + 就绪校验，失败即退出
+#
+# 用法（见 infra/verify_e2e_local.sh）：
+#   docker compose -p pt-e2e -f docker-compose.yml -f infra/compose.e2e.yml \
+#     up --build -d db redis && docker compose ... run --rm init && ...
+services:
+  db:
+    ports: !override ["15433:5432"]
+    environment:
+      POSTGRES_DB: pt_e2e
+      POSTGRES_USER: pt
+      POSTGRES_PASSWORD: pt
+
+  redis:
+    ports: !override ["16380:6379"]
+
+  init:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
+      - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - EMBEDDING_PROVIDER=stub
+      - EMBEDDING_MODEL=e2e-stub-1024
+      - EMBEDDING_DIM=1024
+    command: >
+      sh -c "alembic upgrade head &&
+             python infra/seed_kb_fixture.py"
+    restart: "no"
+
+  backend:
+    ports: !override ["18000:8000"]
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
+      - REDIS_URL=redis://redis:6379/1
+      - LLM_PROVIDER=mock
+      - LLM_MODEL=mock-demo-model
+      - GRAPH_DATA_MODE=fixture
+      # RT-04 模型锁：fixture KB 由 init 以同一组 embedding 配置写入
+      - EMBEDDING_PROVIDER=stub
+      - EMBEDDING_MODEL=e2e-stub-1024
+      - EMBEDDING_DIM=1024
+      - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - BOOTSTRAP_ADMIN_EMAIL=e2e-admin@patterntrace.test
+      - BOOTSTRAP_ADMIN_PASSWORD=E2eAdminPass123!
+      - REPORTS_DIR=/app/output/reports
+
+  worker:
+    ports: []
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
+      - REDIS_URL=redis://redis:6379/1
+      - LLM_PROVIDER=mock
+      - LLM_MODEL=mock-demo-model
+      - GRAPH_DATA_MODE=fixture
+      - EMBEDDING_PROVIDER=stub
+      - EMBEDDING_MODEL=e2e-stub-1024
+      - EMBEDDING_DIM=1024
+      - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - REPORTS_DIR=/app/output/reports
+
+  frontend:
+    ports: !override ["13000:3000"]

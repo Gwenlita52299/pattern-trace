@@ -82,3 +82,13 @@ def admin_client(client):
     token = resp.json()["access_token"]
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
+
+
+@pytest.fixture(autouse=True)
+def _pin_embedding_stub(monkeypatch):
+    """issue #78：本地 .env 的 EMBEDDING_PROVIDER 会泄漏进单测——
+    与 GRAPH_DATA_MODE 泄漏同型：真实 embedding API 会限流/挂起，
+    且模型锁 RT-04 会把外部模型名写进测试库。统一钉 stub。"""
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "stub")
+    monkeypatch.setenv("EMBEDDING_MODEL", "test-stub-1024")
+    monkeypatch.setenv("EMBEDDING_DIM", "1024")

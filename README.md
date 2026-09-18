@@ -112,14 +112,27 @@ LLM_PROVIDER=mock GRAPH_DATA_MODE=fixture uv run python tests/evaluation/run_e2e
 ## 测试与发布门禁
 
 ```bash
-bash infra/verify_phase6.sh       # 阶段6 门禁：单元+E2E+契约+性能+部署配置
+bash infra/verify_e2e_local.sh   # 完整 E2E 门禁（issue #78）：一条命令从全新
+                                 # checkout 构建、初始化隔离 DB/KB、启动全部服务、
+                                 # 跑通分析→判断→子图→PDF/HTML + 独立 worker 队列形态
+bash infra/verify_phase6.sh      # 阶段6 门禁：单元+E2E+契约+性能+部署配置
 uv run pytest tests/unit          # 单元 + 契约（CT-01~03）
 python -m scripts.gen_api_types   # OpenAPI schema 变更后同步前端契约
 uv run python tests/performance/perf_phase6.py PERF-01    # 报告容量基准
 ```
 
+**E2E 环境隔离（必读）**：E2E 全部走独立 compose project（`-p pt-e2e`）、
+独立 DB（名 `pt_e2e`，seed 脚本拒绝向其他库名写入）、独立 Redis DB index
+（`/1`，判决缓存与开发环境隔离）与独立报告卷。`run_e2e_phase4.py` 的
+`_clear_judgments` 会**全表 DELETE judgments**——绝不可将 E2E 脚本指向
+开发或生产数据库；对既有数据库执行清理前必须核对 `DATABASE_URL`。
+fixture KB seed（`infra/seed_kb_fixture.py`）与判决缓存隔离保证
+KB 变更后 E2E 不会命中旧 verdict 假通过。
+
 CI（`.github/workflows/ci.yml`，Node 24）：PR 触发三个 job —— 后端 lint/test/codegen 守护、
-前端 lint + type-check + vitest + build、compose E2E 冒烟（含 `:3000` 同源代理探活）；
+前端 lint + type-check + vitest + build、**完整 E2E**（`verify_e2e_local.sh`：
+分析→判断→报告真实走一遍，主流程经前端同源代理 `:13000`，含停 worker 队列形态
+证明，失败自动上传 compose 日志与产物并清理本次 project 资源）；
 `schedule` nightly 追加 PERF 性能档。
 CI 只做验证门禁，不负责发布；交付形态是 docker compose 私有化部署（见下文）。
 

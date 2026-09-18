@@ -51,9 +51,37 @@ _bg_tasks: set[asyncio.Task] = set()  # 降级路径：强引用防 Task 被 GC
 
 
 def _spawn(coro) -> None:
-    task = asyncio.create_task(coro)
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
+    """进程内降级任务必须跑在**进程级**后台 loop 上。
+
+    issue #78：TestClient 的 portal 是 per-request 的——task 绑定到
+    发起请求的 event loop 后，该请求返回即 portal 关闭，协程被冻结
+    （judgment 永远 queued/processing，无任何报错）。所以 spawn 一律
+    投递到独立的 daemon 后台 loop（run_coroutine_threadsafe），与请求
+    生命周期解耦；uvicorn 真实形态下同一机制也保证任务不受单请求
+    生命周期影响。
+    """
+    try:
+        loop = _bg_loop()
+        _ = asyncio.run_coroutine_threadsafe(coro, loop)
+    except Exception as exc:  # noqa: BLE001 — 降级路径的失败只告警
+        print(f"[task_queue] in-process dispatch failed ({exc!r})")
+
+
+_bg_loop_handle = None  # (thread, loop)
+
+
+def _bg_loop():
+    """单例后台 event loop（daemon 线程），进程生命周期内复用。"""
+    global _bg_loop_handle
+    if _bg_loop_handle is None:
+        import threading
+
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(target=loop.run_forever, daemon=True,
+                                  name="task-queue-inprocess")
+        thread.start()
+        _bg_loop_handle = (thread, loop)
+    return _bg_loop_handle[1]
 
 
 async def dispatch_analysis(judgment_id: str) -> bool:

@@ -15,12 +15,15 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 DERIVED_DIR = Path(__file__).resolve().parents[2] / "ingest/seed/graphormer_v2/derived"
 
@@ -30,13 +33,25 @@ MIN_EGO_COVERAGE_RATIO = 0.5
 
 @lru_cache(maxsize=1)
 def _pooled():
-    d = np.load(str(DERIVED_DIR / "graphormer_pooled.npz"))
+    try:
+        d = np.load(str(DERIVED_DIR / "graphormer_pooled.npz"))
+    except (FileNotFoundError, OSError) as exc:
+        # issue #78：npz 缺失（全新环境/精简镜像）不得 500——留可 grep 的
+        # 降级标记，调用方回退 hybrid 召回（与覆盖率不足同级）
+        log.warning("[graphormer] pooled vectors unavailable (%s); "
+                    "graphormer channel disabled, falling back to hybrid", exc)
+        return None
     return d["pooled"], d["seeds"], d["scal_mu"], d["scal_sd"]
 
 
 @lru_cache(maxsize=1)
 def ego_lookup() -> dict[str, np.ndarray]:
-    d = np.load(str(DERIVED_DIR / "ego_members.npz"))
+    try:
+        d = np.load(str(DERIVED_DIR / "ego_members.npz"))
+    except (FileNotFoundError, OSError) as exc:
+        log.warning("[graphormer] ego members unavailable (%s); "
+                    "graphormer channel disabled, falling back to hybrid", exc)
+        return {}
     return {a: v for a, v in zip(d["addrs"].tolist(), d["ego"])}
 
 
@@ -110,8 +125,11 @@ def scal_features_from_canonical(canon: dict) -> np.ndarray:
 
 
 def graphormer_query_vector(canon: dict) -> np.ndarray | None:
-    """canonical 子图 → 784 维查询向量；ego 覆盖不足时 None。"""
-    _, _, scal_mu, scal_sd = _pooled()
+    """canonical 子图 → 784 维查询向量；数据缺失/ego 覆盖不足时 None。"""
+    pooled = _pooled()
+    if pooled is None:
+        return None
+    _, _, scal_mu, scal_sd = pooled
     ego = ego_lookup()
     addr_nodes = [n for n in (canon.get("nodes") or [])
                   if n.get("kind") == "address"]
@@ -132,5 +150,10 @@ def graphormer_query_vector(canon: dict) -> np.ndarray | None:
 
 def index_vectors() -> tuple[np.ndarray, dict[str, int]]:
     """入库向量矩阵 + seed_address → 行号映射（离线评估/校验用）。"""
-    pooled, seeds, _, _ = _pooled()
+    pooled = _pooled()
+    if pooled is None:
+        raise FileNotFoundError(
+            f"graphormer pooled vectors not found under {DERIVED_DIR}; "
+            "run ingest/load_graphormer_candidates.py first")
+    pooled, seeds, _, _ = pooled
     return pooled, {s: i for i, s in enumerate(seeds.tolist())}

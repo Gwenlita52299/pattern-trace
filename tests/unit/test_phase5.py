@@ -494,5 +494,7 @@ class TestReliabilitySemantics:
                 "SELECT from_status, to_status FROM judgment_events "
                 "WHERE judgment_id = :jid ORDER BY id"),
                 {"jid": jid}).fetchall()
-        seq = [(f, t) for f, t in events]
+        # issue #78：judgment_events 现在混有 stage:* 观测行——
+        # 状态迁移与阶段观测区分开，本断言只看状态迁移序列
+        seq = [(f, t) for f, t in events if not t.startswith("stage:")]
         assert seq == [("queued", "processing"), ("processing", "completed")]

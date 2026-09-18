@@ -8,6 +8,9 @@ RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
 
 COPY backend/ backend/
+# issue #78：seed_kb_fixture 复用 ingest.common（content_hash/upsert_rows）；
+# 只复制 py 源文件——seed 语料 parquet/npz 不进镜像（运行时经 volume 挂载）
+COPY ingest/*.py ingest/
 COPY alembic.ini ./
 COPY migrations/ migrations/
 COPY workers/ workers/

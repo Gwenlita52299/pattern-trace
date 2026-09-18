@@ -267,6 +267,24 @@ class TestCacheSemantics:
         _judge_once(client, cache=cache, builder_version="gb-v2")
         assert client.calls == 2
 
+    def test_lj_mock_scenario_isolated_cache_keys(self):
+        # issue #78：不同 mock 场景对同一子图的判定必须互不污染——
+        # invalid_evidence 与正例同子图缓存 key 必须不同（否则 E2E
+        # 场景间假通过/假失败）；真实 provider（无 scenario）key 不变
+        assert (build_cache_key("gb-v1", "a", "h", "m", "v") !=
+                build_cache_key("gb-v1", "a", "h", "m", "v",
+                                mock_scenario="invalid_evidence_all_retries"))
+        client = MockLLMClient(scenario="valid_high")
+        cache = InMemoryCache()
+        _judge_once(client, cache=cache)
+        _judge_once(client, cache=cache)  # 同场景 → 命中
+        assert client.calls == 1
+        client.scenario = "invalid_evidence_all_retries"
+        # 场景变了 → miss → 重新判定（invalid 场景重试耗尽后显式失败，
+        # 不会复用正例场景的缓存 verdict）
+        with pytest.raises(JudgmentValidationError):
+            _judge_once(client, cache=cache)
+
     class FakeRedis:
         """记录 setex TTL 的最小 redis 替身（LJ-18）。"""
 

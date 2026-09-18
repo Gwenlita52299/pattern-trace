@@ -95,9 +95,20 @@ class JudgmentResult:
 def build_cache_key(
     builder_version: str, address: str, subgraph_hash: str,
     model: str, prompt_version: str,
+    mock_scenario: str | None = None,
 ) -> str:
-    """缓存 key 含 builder_version（评审 P2-23）。"""
-    return f"{builder_version}:{address}:{subgraph_hash}:{model}:{prompt_version}"
+    """缓存 key 含 builder_version（评审 P2-23）。
+
+    issue #78：mock provider 的 per-judgment 场景必须进 key——不同
+    scenario（invalid_evidence/no_match/正例）对同一子图的判定不同，
+    不加会导致 E2E 场景间缓存互相污染。真实 provider scenario=None，
+    key 与旧格式一致。
+    """
+    key = (f"{builder_version}:{address}:{subgraph_hash}"
+           f":{model}:{prompt_version}")
+    if mock_scenario:
+        key += f":mock:{mock_scenario}"
+    return key
 
 
 def canonical_subgraph_hash(subgraph: dict) -> str:
@@ -344,8 +355,11 @@ class LLMJudge:
         }
         # hash 只依赖结构化字段（label 参与展示不影响 key，LJ-16）
         subgraph_hash = canonical_subgraph_hash(canon)
-        cache_key = build_cache_key(builder_version, address, subgraph_hash,
-                                    model, prompt_version)
+        # issue #78：mock provider 的 scenario 进缓存 key（防场景间污染）
+        cache_key = build_cache_key(
+            builder_version, address, subgraph_hash,
+            model, prompt_version,
+            mock_scenario=getattr(self.client, "scenario", None))
 
         cached = self.cache.get(cache_key)
         if cached is not None:  # LJ-07：命中即返回，不触达 LLM

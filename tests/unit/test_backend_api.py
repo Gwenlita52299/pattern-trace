@@ -218,7 +218,9 @@ class TestAnalyzeValidation:
                 if resp.status_code == 429:
                     retry_after = resp.headers.get("Retry-After")
             assert 429 in codes                      # 第 4 次起触发
-            assert all(c in (202, 500) for c in codes[:3])  # 前 3 次未被限流
+            # 202=新任务；200=BE-46 幂等复用进行中任务（issue #78 起
+            # 降级任务跑在进程级后台 loop，前一任务可能仍在进行中）
+            assert all(c in (202, 200, 500) for c in codes[:3])
             assert retry_after is not None           # 带 Retry-After 头
         finally:
             for key, value in saved.items():
@@ -444,3 +446,47 @@ class TestStateMachineGuards:
             assert_transition("completed", "queued")
         with pytest.raises(InvalidStateTransition, match="terminal"):
             assert_transition("failed", "processing")
+
+
+class TestMockScenarioChannel:
+    """issue #78：mock_scenario 是 mock provider 的 per-judgment 测试通道。"""
+
+    @requires_db
+    def test_invalid_scenario_yields_failed_terminal(self, api_client):
+        _clear_judgments()
+        r = api_client.post("/api/v1/addresses/analyze",
+                            json={"address": _demo_seed(),
+                                  "mock_scenario": "invalid_evidence_all_retries"})
+        assert r.status_code == 202
+        payload = _poll_terminal(api_client, r.json()["judgment_id"])
+        assert payload["status"] == "failed"
+        assert payload["error_code"] == "LLM_VALIDATION_FAILED"
+
+    def test_mock_scenario_rejected_without_mock_provider(self):
+        # 非 mock provider 下一律 422——生产/live 形态不存在
+        # 「按请求注入 LLM 故障」的接口
+        import os
+
+        monkey_env = {"JWT_SECRET":
+                      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                      "LLM_PROVIDER": "deepseek", "GRAPH_DATA_MODE": "fixture"}
+        saved = {k: os.environ.get(k) for k in monkey_env}
+        os.environ.update(monkey_env)
+        reset_settings()
+        reset_stores()
+        try:
+            client = TestClient(create_app())
+            client.headers.update({"X-Requested-With": "XMLHttpRequest"})
+            r = client.post("/api/v1/addresses/analyze",
+                            json={"address": _demo_seed(),
+                                  "mock_scenario": "valid_no_match"})
+            assert r.status_code == 422
+            assert r.json()["error_code"] == "MOCK_SCENARIO_REQUIRES_MOCK"
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            reset_settings()
+            reset_stores()

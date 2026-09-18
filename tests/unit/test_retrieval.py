@@ -324,3 +324,25 @@ class TestCanonicalConversion:
         feats = extract_features(canon["nodes"], canon["edges"])
         assert len(feats) == FEATURE_DIM
         assert describe_subgraph(canon)
+
+
+class TestGraphormerMissingDataFallback:
+    """issue #78：npz 缺失不得 500——graphormer 通道降级 + 可观测日志。"""
+
+    def test_missing_files_return_none_with_fallback_log(self, monkeypatch, caplog):
+        import logging
+
+        from backend.retrieval import graphormer
+
+        monkeypatch.setattr(graphormer, "DERIVED_DIR",
+                            graphormer.Path("/nonexistent/pt-e2e-test"))
+        graphormer._pooled.cache_clear()
+        graphormer.ego_lookup.cache_clear()
+        with caplog.at_level(logging.WARNING):
+            q = graphormer.graphormer_query_vector(
+                {"nodes": [{"kind": "address", "label": "a",
+                            "first_layer": 0}], "edges": []})
+        assert q is None  # 降级信号：调用方回退 hybrid 召回
+        assert "falling back to hybrid" in caplog.text  # 可 grep 的降级标记
+        graphormer._pooled.cache_clear()
+        graphormer.ego_lookup.cache_clear()
