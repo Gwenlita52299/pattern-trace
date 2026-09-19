@@ -34,6 +34,13 @@ dev = [
     "locust>=2.29",
     "numpy>=2.0",
 ]
+# issue #82：在线 Graphormer ego 前向（分析 worker 镜像按需安装）。
+# 注意 transformers 5.x 移除了 Graphormer 类，必须 pin 4.x
+graphormer-online = [
+    "torch>=2.2",
+    "transformers>=4.40,<5",
+    "huggingface_hub>=0.23",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

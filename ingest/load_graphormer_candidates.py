@@ -172,6 +172,10 @@ def build_pattern_rows(base_dir: Path):
         vec = pooled_by_seed.get(seed)
         if vec is not None:
             row["graphormer_embedding"] = [float(x) for x in vec]
+            # 检索向量模型版本锁（issue #82）：与查询侧在线前向同权重校验
+            from backend.core.config import get_settings
+
+            row["graphormer_model_id"] = get_settings().graphormer_model_name
         yield row
         if (k + 1) % 1000 == 0:
             print(f"    built {k + 1}/{len(seeds)} closures", flush=True)

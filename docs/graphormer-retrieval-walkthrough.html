@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PatternTrace 检索链路讲解 — KB 迁移后的实际操作</title>
+<style>
+:root{
+  --bg:#0d1117; --panel:#161b22; --panel2:#1c2129; --line:#30363d;
+  --tx:#e6edf3; --sub:#8b949e;
+  --blue:#58a6ff; --green:#3fb950; --orange:#d29922; --red:#f85149;
+  --purple:#bc8cff; --cyan:#39c5cf;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font:15px/1.75 "PingFang SC","Microsoft YaHei",system-ui,sans-serif;padding:40px 16px 80px}
+.wrap{max-width:980px;margin:0 auto}
+h1{font-size:26px;margin-bottom:6px}
+.meta{color:var(--sub);font-size:13px;margin-bottom:28px}
+h2{font-size:20px;margin:40px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line);color:var(--blue)}
+h3{font-size:16px;margin:22px 0 8px;color:var(--purple)}
+p{margin:10px 0}
+code{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:13px ui-monospace,Menlo,monospace;color:var(--cyan)}
+pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font:13px/1.6 ui-monospace,Menlo,monospace;margin:12px 0}
+pre b{color:var(--orange);font-weight:600}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0}
+.card.blue{border-left:4px solid var(--blue)} .card.green{border-left:4px solid var(--green)}
+.card.orange{border-left:4px solid var(--orange)} .card.red{border-left:4px solid var(--red)}
+.tag{display:inline-block;border-radius:20px;padding:1px 10px;font-size:12px;margin-right:6px;vertical-align:1px}
+.t-blue{background:#1f3a5f;color:var(--blue)} .t-green{background:#1d3a26;color:var(--green)}
+.t-orange{background:#3f2d0d;color:var(--orange)} .t-purple{background:#3b2a55;color:var(--purple)}
+.t-red{background:#4a1c1c;color:var(--red)}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;vertical-align:top}
+th{background:var(--panel2);color:var(--sub);font-weight:600}
+.step{display:flex;gap:14px;margin:16px 0}
+.step .num{flex:none;width:32px;height:32px;border-radius:50%;background:var(--panel2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--blue)}
+.step .body{flex:1;min-width:0}
+.arrow{color:var(--sub);text-align:center;font-size:18px;margin:2px 0}
+.kbd{background:#21262d;border:1px solid #444c56;border-radius:5px;padding:2px 8px;font:12px ui-monospace,monospace}
+.notice{background:#241c10;border:1px solid #5c4a1a;border-radius:8px;padding:12px 16px;margin:14px 0;font-size:14px}
+.mermaid-flow{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:20px;font:13px/2 ui-monospace,Menlo,monospace;white-space:pre;overflow-x:auto}
+.hl{color:var(--green);font-weight:600} .hl-o{color:var(--orange);font-weight:600}
+.hl-b{color:var(--blue);font-weight:600} .hl-r{color:var(--red);font-weight:600} .hl-p{color:var(--purple);font-weight:600}
+.dim{color:var(--sub)}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>Graphormer KB 迁移后，一次分析到底发生了什么</h1>
+<div class="meta">对应代码：backend/retrieval/retriever.py · backend/retrieval/graphormer.py · backend/llm_judge/judge.py ｜ 数据现状：patterns 表 9,346 行，graphormer_embedding 与 retrieval_fingerprint 100% 填充</div>
+
+<!-- ============================================================ -->
+<h2>0. 先分清「离线侧」和「在线侧」</h2>
+
+<div class="card blue">
+<p><b>离线侧（已经做完、躺在库里的东西）</b>——这就是你说的"KB 迁移过来了"：</p>
+<table>
+<tr><th>资产</th><th>内容</th><th>在哪</th></tr>
+<tr><td><code>graphormer_pooled.npz</code> (17.8MB)</td><td>9,346 个 confirmed 候选子图的 <b>784d 入库向量</b>（[768d 池化 | 16 标量]）+ 全库 μ/σ</td><td>文件 + 已导入 <code>patterns.graphormer_embedding</code> 列</td></tr>
+<tr><td><code>ego_members.npz</code> (12.6MB)</td><td>上述候选的<b>成员地址并集</b>（12,643 个地址）的 768d ego 向量</td><td>仅文件（在线时内存里查）</td></tr>
+<tr><td><code>retrieval_fingerprint</code> 列</td><td>每个候选的 WL 多重集指纹（精排通道分的预计算）</td><td>patterns 表，9,346 行全填充</td></tr>
+<tr><td><code>structural_features / semantic_embedding</code> 列</td><td>20d 结构特征向量 + 描述文本 embedding（回退路径用）</td><td>patterns 表</td></tr>
+</table>
+<p><b>在线侧（每次 analyze 都要现算的）</b>只有输入子图自己的表示——而它<b>不跑任何神经网络</b>，是"查表 + 加权平均"。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>1. 在线全流程（六步）</h2>
+
+<div class="mermaid-flow">
+analyze(地址, hops, time_window)
+   │
+   ▼
+<span class="hl-b">① graphbuild</span>  BFS 展开 → SubgraphResult(节点/边/统计)
+   │              若历史分页截断/分支失败 → data_quality=degraded
+   ▼
+<span class="hl-o">② 构造查询向量</span>  graphormer_query_vector(canon)      ← 不是跑模型！
+   │   q = [ Σ wᵢ·ego[addrᵢ] / Σ wᵢ  (768d)  |  16d 标量 ]  → L2
+   │   其中 ego[addrᵢ] = 从 ego_members.npz 查这个地址的向量
+   │   wᵢ = 1/(1+depthᵢ)，越靠近种子的地址权重越大
+   │
+   ├── 成员覆盖率 ≥ 50% ？──是──→ <span class="hl">③a Graphormer 召回（主路径）</span>
+   │                                pgvector: patterns.graphormer_embedding
+   │                                cosine 精确扫 Top-500
+   │
+   └── 覆盖率 < 50%（live 新地址）→ <span class="hl-o">③b hybrid 召回（回退）</span>
+             结构特征 20d 向量 + describe_subgraph 文本 embedding
+             加权混合召回
+   ▼
+<span class="hl-p">④ 精排 _rerank</span>  final = 0.1·cos + 0.1·wljac + 0.8·ov
+   │   主路径行带 retrieval_fingerprint → 指纹通道分（免回读 canonical）
+   │   回退路径行带 canonical_subgraph → 在线现算 channel_scores
+   ▼
+<span class="hl-b">⑤ Top-K 候选</span>  PatternCandidate{分数全部算好：
+   │   wl_kernel_score=0.058… ← 问题就出在下一步丢掉它}
+   ▼
+<span class="hl-r">⑥ LLM judge</span>  build_messages 目前只传 description + difference_note
+   （分数不传）→ verdict{matched_pattern, risk_level, confidence}
+</div>
+
+<div class="notice">⚠ <b>为什么"不跑模型"是对齐要求而不是偷懒</b>：KB 侧 9,346 个向量是离线 batch 用 Graphormer 算好的。若在线侧对输入子图再跑一次模型前向，两侧 embedding 空间反而难保证一致。基准协议（run_round）定义的查询向量就是"ego 成员池化"——把输入子图表示成它地址集合在<b>已知地址向量空间</b>中的加权质心。代价：输入子图的地址必须在 12,643 语料里出现过，否则查不到 ego 向量（coverage 门槛的由来）。</div>
+
+<!-- ============================================================ -->
+<h2>2. 分步细节</h2>
+
+<h3>① graphbuild（backend/graph_builder/builder.py）</h3>
+<p>地址种子 → 拥有 UTXO 列表 → BFS 逐层 outspend 展开，产出 canonical 子图。<span class="hl-o">这一步只产出结构</span>（节点 kind=address/transaction、边、层级、金额），还没有任何"向量"。</p>
+
+<h3>② 查询向量 = 查表池化（backend/retrieval/graphormer.py:127）</h3>
+<pre><b>输入：</b>canonical 子图（节点+边）
+<b>动作：</b>1. 找出所有 address 节点，逐个去 ego_members.npz 查 768d ego 向量
+      2. 按深度加权求和：q_pool = Σ (1/(1+depth_i))·ego_i / Σ (1/(1+depth_i))
+      3. 算 16 维标量特征（层级边计数 log10、等额占比、跨链比例…），
+         用全库 μ/σ 做 z 归一化
+      4. 拼 [q_pool | q_scal] → L2 归一化 → 784d 查询向量
+<b>失败条件：</b>地址成员在 ego 语料里的覆盖率 &lt; 50% → 返回 None</pre>
+
+<div class="card orange">
+<p><b>覆盖率门槛 = 主路径与回退路径的分界线</b>。12,643 个 ego 地址全部来自 Lazarus confirmed 案例——所以：</p>
+<table>
+<tr><th>场景</th><th>覆盖率</th><th>走哪条路</th></tr>
+<tr><td>评测集 60 地址（同簇/语料内）</td><td>高</td><td><span class="hl">③a Graphormer 主路径</span></td></tr>
+<tr><td>live 真实用户输入的新地址</td><td>通常 0%</td><td><span class="hl-o">③b hybrid 回退</span></td></tr>
+</table>
+<p>覆盖率不足时静默给零向量会污染排序（全库都会变成"看起来相似"），所以显式回退——这是设计选择，不是缺陷。</p>
+</div>
+
+<h3>③a Graphormer 召回（retriever.py:256）</h3>
+<pre>SELECT … 1 - (graphormer_embedding &lt;=&gt; CAST(:gv AS vector)) AS sim
+FROM patterns
+WHERE graphormer_embedding IS NOT NULL
+ORDER BY graphormer_embedding &lt;=&gt; :gv   ← 精确扫描（显式关 indexscan）
+LIMIT 500</pre>
+<p>9,346 行全表 cosine 在 <50ms 量级；返回的行自带 <code>retrieval_fingerprint</code>。</p>
+
+<h3>③b hybrid 召回（retriever.py:276）</h3>
+<pre>dist = :w_struct·(structural_features &lt;=&gt; :sv) + :w_semantic·(semantic_embedding &lt;=&gt; :ev)</pre>
+<p>注意有 <b>embedding 模型锁</b>（<code>WHERE embedding_model = :model</code>）：查询侧 embedding provider 的模型/维度必须与入库时一致，否则直接报 EmbeddingModelMismatch——防止换模型后新旧向量混比。</p>
+
+<h3>④ 精排（retriever.py:335，权重 0.1 / 0.1 / 0 / 0.8）</h3>
+<table>
+<tr><th>通道</th><th>算什么</th><th>权重</th></tr>
+<tr><td>cos</td><td>阶段 1 召回分（1−dist）</td><td>0.1</td></tr>
+<tr><td>wljac</td><td>WL 多重集 Jaccard（图结构同构相似度）</td><td>0.1</td></tr>
+<tr><td>fp</td><td>指纹整体相似</td><td>0.0</td></tr>
+<tr><td>ov</td><td>出边 multiset overlap（金额主干重合度）</td><td>0.8 主导</td></tr>
+</table>
+<p>主路径候选：通道分从 <code>retrieval_fingerprint</code>（离线指纹）直接算；回退候选：在线对 canonical 现算。<b>所有分数（含 wl_kernel_score）都装进 PatternCandidate 返回</b>。</p>
+
+<h3>⑥ LLM judge 收到的（judge.py:262 build_messages）</h3>
+<div class="card red">
+<pre>pattern_name: mixer_layering_2hop_7nodes
+  source: lazarus_confirmed
+  provenance: confirmed
+  "结构：4 地址 3 交易，恰好 8 条边，根地址 bc1q…"   ← ingest 自动生成模板
+  difference vs input: …（仅 Δnode&gt;2 时才有，本例 Δ=0 → 没有）</pre>
+<p><b>judge 看不到</b>：<code>wl_kernel_score=0.058</code>（结构弱匹配的正确信号）、final 分、ov 分——全部被丢弃。于是 judge 把 description 里的"恰好 8 条边"读成硬等值条件，#71 的变体案例（7 边）被误杀为 no_match + 0.0。这就是 #71 方案 C（透传分数）要修的最后一公里。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2>3. 把你原来的表述对到代码上</h2>
+
+<table>
+<tr><th>你的理解</th><th>实际情况</th></tr>
+<tr><td>"graphbuild 得到子图后应该直接 graphormer 做 embedding"</td><td><b>方向对，实现是"查表池化"</b>：输入子图不跑模型，用成员地址去 ego 语料查向量做加权平均。跑真模型前向属于未接入的 P2（retriever.py 里 channel_w_align 的注释）</td></tr>
+<tr><td>"然后进行粗排召回"</td><td>对：784d 查询向量 ↔ KB 的 784d 入库向量做 pgvector cosine 粗排 Top-500</td></tr>
+<tr><td>"指纹路径"</td><td>只是<b>精排</b>的实现细节：主路径候选带离线 WL 指纹 → 通道分从指纹算；回退候选没有指纹 → 现算。不影响召回本身</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>4. 一句话版本</h2>
+
+<div class="card green">
+<p><b>KB 迁移后，一次分析的检索 = </b>「拿输入子图的地址去 12,643 个已知地址向量里查表 → 按深度加权平均出 784d 查询向量 → 和 9,346 个离线预计算的 KB 向量比 cosine 粗排 → WL/overlap 通道精排 Top-K → 分数<b>目前没有</b>传给 LLM，judge 只读 KB 的描述文本」。live 新地址查不到 ego 向量就回退文本+结构 hybrid 召回。</p>
+</div>
+
+</div></body>
+</html>

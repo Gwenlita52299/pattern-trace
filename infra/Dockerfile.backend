@@ -3,7 +3,9 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
+# issue #82：graphormer-online 组（torch/transformers 4.x）使在线 ego 前向
+# 在 worker 生效；未安装时自动回退 ego 查表/hybrid（retriever 三级链）
+RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev --extra graphormer-online
 # uv sync 装到 /app/.venv，不加入 PATH 则 alembic/uvicorn/arq 命令找不到
 ENV PATH="/app/.venv/bin:$PATH"
 

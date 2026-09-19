@@ -68,6 +68,9 @@ services:
       - EMBEDDING_PROVIDER=stub
       - EMBEDDING_MODEL=e2e-stub-1024
       - EMBEDDING_DIM=1024
+      # E2E 固定 ego 查表/hybrid 协议：在线前向（torch）加载+推理拖慢
+      # fixture 闭环且不确定性高；live 生产由部署 env 控制 auto
+      - GRAPHORMER_QUERY_MODE=off
       - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       - REPORTS_DIR=/app/output/reports
 

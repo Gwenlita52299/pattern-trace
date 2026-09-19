@@ -126,6 +126,11 @@ class Settings(BaseSettings):
     # 超预算提前收敛（BFS 停止展开、置 degraded），缓存命中不计数。
     graph_request_budget: int = 600
     graph_build_time_budget_seconds: float = 300.0
+    # issue #82：查询向量三级链 auto|online|ego|off。auto=在线 ego 前向
+    # （依赖 optional graphormer-online 组），失败自动回退 ego 查表/hybrid；
+    # off=跳过 Graphormer 全部路径直接 hybrid（回归保护位）
+    graphormer_query_mode: str = "auto"
+    graphormer_model_name: str = "clefourrier/graphormer-base-pcqm4mv2"
     demo_seeds: str = ""                 # 匿名白名单地址 CSV；空则用 fixture 内 seed
     zombie_timeout_seconds: int = 120    # 进行中任务超时回收阈值（BE-40）
 

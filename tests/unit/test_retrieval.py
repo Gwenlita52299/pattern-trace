@@ -346,3 +346,84 @@ class TestGraphormerMissingDataFallback:
         assert "falling back to hybrid" in caplog.text  # 可 grep 的降级标记
         graphormer._pooled.cache_clear()
         graphormer.ego_lookup.cache_clear()
+
+
+class TestGraphormerOnlineChain:
+    """issue #82：查询向量三级链 online → ego 查表 → hybrid。"""
+
+    def test_no_torch_falls_back_to_ego_path(self, monkeypatch):
+        """默认依赖（无 torch）下 online 层返回 None，链回退 ego 查表——
+        行为与三级链引入前完全一致（回归保护）。"""
+        from backend.retrieval import graphormer, graphormer_online
+
+        assert graphormer_online._DEPS_OK is False  # 单测环境不装 torch
+        monkeypatch.setattr(graphormer, "DERIVED_DIR",
+                            graphormer.Path("/nonexistent/pt-e2e-test"))
+        graphormer._pooled.cache_clear()
+        graphormer.ego_lookup.cache_clear()
+        canon = {"nodes": [{"kind": "address", "label": "a",
+                            "first_layer": 0}], "edges": []}
+        assert graphormer_online.query_vector_online(canon) is None
+        # 三级链：online None → ego 查表也 None → 由 retriever 降 hybrid
+        assert graphormer.graphormer_query_vector(canon) is None
+        graphormer._pooled.cache_clear()
+        graphormer.ego_lookup.cache_clear()
+
+    def test_mode_off_skips_online_import(self):
+        """graphormer_query_mode=off：retriever 不尝试 online 层。"""
+        import inspect
+
+        src = inspect.getsource(
+            __import__("backend.retrieval.retriever",
+                       fromlist=["Retriever"]).Retriever.retrieve)
+        # off 只进入 ego 查表路径（字符串级守卫，防回归三级链逻辑漂移）
+        assert 'mode in ("auto", "online")' in src
+        assert 'mode = getattr(self.settings, "graphormer_query_mode", "auto")' in src
+
+    def test_projection_produces_addr_adjacency(self):
+        """canonical（addr↔tx 二部图）→ addr→addr 投影 + 金额跨 tx 求和。"""
+        from backend.retrieval.graphormer_online import project_addr_adjacency
+
+        canon = {
+            "nodes": [
+                {"id": "addr:s", "kind": "address", "label": "bc1qs",
+                 "first_layer": 0, "utxo_count": 2, "total_received_btc": 3.0,
+                 "total_sent_btc": 2.0, "layer_span": 1, "is_censored": False},
+                {"id": "addr:d", "kind": "address", "label": "bc1qd",
+                 "first_layer": 1, "utxo_count": 1, "total_received_btc": 2.0,
+                 "total_sent_btc": 0.0, "layer_span": 0, "is_censored": False},
+                {"id": "tx:t1", "kind": "transaction", "label": "tx1"},
+                {"id": "tx:t2", "kind": "transaction", "label": "tx2"},
+            ],
+            "edges": [
+                {"source": "addr:s", "target": "tx:t1",
+                 "total_num_inputs": 2},
+                {"source": "tx:t1", "target": "addr:d", "dst_value_btc": 1.0,
+                 "is_remixer": False, "is_crosschain": False},
+                {"source": "addr:s", "target": "tx:t2",
+                 "total_num_inputs": 2},
+                {"source": "tx:t2", "target": "addr:d", "dst_value_btc": 0.5,
+                 "is_remixer": True, "is_crosschain": False,
+                 "op_return_protocol": "thorchain"},
+            ],
+        }
+        adj, in_adj, attr = project_addr_adjacency(canon)
+        # 两 tx 的 (s→d) 合并：金额求和 = 1.5，attrs 取最大单笔（1.0 → pack 无 thor）
+        assert adj["addr:s"]["addr:d"][0] == 1.5
+        assert in_adj["addr:d"]["addr:s"] is adj["addr:s"]["addr:d"]
+        assert set(attr) == {"addr:s", "addr:d"}
+
+    def test_ego_graph_shape_protocol(self):
+        """F=7 节点特征 / 4 槽边 / spatial 短路距离 ≤5 或 16（run_g 协议）。"""
+        from backend.retrieval import graphormer_online as go
+
+        adj = {"a": {"b": [2.0, 1, 3]}}
+        in_adj = {"b": {"a": [2.0, 1, 3]}}
+        attr = {"a": (0, 2, 3.0, 2.0, 1, 0), "b": (1, 1, 2.0, 0.0, 0, 0)}
+        nodes, indeg, outdeg, sp, edges = go._build_ego_graph(
+            adj, in_adj, "a", attr)
+        assert nodes.shape == (2, 7)
+        assert nodes[0, 0] == 1 + 2 * 8 + min(1, 7)      # addr_type*deg 混合 id（"a"=类 2）
+        assert indeg[0] == 1 and outdeg[0] == 2          # deg_bucket(d)=min(d,7)+1
+        assert sp.shape == (2, 2) and sp[0, 1] == 1      # BFS 短路距离
+        assert edges.shape == (2, 2, 5, 4)               # 4 槽边特征

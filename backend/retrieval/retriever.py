@@ -214,9 +214,20 @@ class Retriever:
             return RetrievalResult()  # RT-18：空子图 → 明确的无匹配信号
 
         recall_limit = self.settings.retrieval_recall_limit
-        # 主路径：Graphormer 查询向量（基准 cos 通道）→ pgvector cosine 召回。
-        # 覆盖不足（live 新地址不在 ego 语料）时回退文本/结构 hybrid 召回
-        qvec = graphormer_query_vector(canon)
+        # 查询向量三级链（issue #82）：在线 ego 前向（live 全覆盖，依赖
+        # optional torch/transformers）→ ego 语料查表池化（评测/已知地址）
+        # → hybrid 文本+结构召回。每级失败/覆盖不足自动降级。
+        mode = getattr(self.settings, "graphormer_query_mode", "auto")
+        qvec = None
+        if mode in ("auto", "online"):
+            try:
+                from .graphormer_online import query_vector_online
+            except ImportError:
+                query_vector_online = None
+            if query_vector_online is not None:
+                qvec = query_vector_online(canon)
+        if qvec is None:
+            qvec = graphormer_query_vector(canon)
         if qvec is not None:
             recalled = self._graphormer_recall(
                 qvec, exclude_ids=exclude_ids or [], limit=recall_limit)
@@ -254,12 +265,14 @@ class Retriever:
                    (graphormer_embedding <=> CAST(:gv AS vector)) AS dist
             FROM patterns
             WHERE graphormer_embedding IS NOT NULL
+              AND graphormer_model_id = :gmodel
               AND id NOT IN :excluded
             ORDER BY graphormer_embedding <=> CAST(:gv AS vector)
             LIMIT :limit
         """).bindparams(bindparam("excluded", expanding=True))
         rows = self.session.execute(sql, {
             "gv": str([round(float(x), 8) for x in qvec]),
+            "gmodel": self.settings.graphormer_model_name,
             "excluded": exclude_ids or [""],
             "limit": limit,
         }).mappings().all()
