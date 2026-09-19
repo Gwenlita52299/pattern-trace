@@ -23,6 +23,7 @@ from backend.llm_judge.judge import (
     JudgmentValidationError,
     LLMJudge,
     build_cache_key,
+    build_messages,
     canonical_subgraph_hash,
     parse_and_validate,
 )
@@ -455,7 +456,9 @@ class TestPromptAndPerf:
         assert 'Matching state is expressed ONLY by matched_pattern' \
                in SYSTEM_PROMPT
         assert "Do not hallucinate transaction IDs or addresses." in SYSTEM_PROMPT
-        assert "Confidence is a float between 0.0 and 1.0." in SYSTEM_PROMPT
+        assert ("Confidence is a float between 0.0 and 1.0. It expresses "
+                "certainty in the risk assessment, not in pattern matching."
+                in SYSTEM_PROMPT)
 
     def test_lj20_pipeline_overhead_p95_within_budget(self):
         delay_ms = 5  # CI 友好缩放：性质不变（扣除已知 mock 延迟后的管线开销）
@@ -468,3 +471,43 @@ class TestPromptAndPerf:
             overheads.append((time.perf_counter() - t0) * 1000 - delay_ms)
         p95 = sorted(overheads)[int(0.95 * (len(overheads) - 1))]
         assert p95 <= 500  # spec：管线自身开销 p95 ≤ 500ms
+
+
+class TestIssue71CalibrationPassthrough:
+    """issue #71（方案 C）：精排校准信号透传进 prompt。"""
+
+    def _candidate(self, **kw):
+        from backend.retrieval.retriever import PatternCandidate
+
+        base = dict(
+            pattern_id="p1", name="mixer_layering", description="",
+            canonical_subgraph={"nodes": [], "edges": []},
+            similarity_score=0.61, structural_similarity=0.44,
+            semantic_similarity=0.43, wl_kernel_score=0.058,
+            fp_score=0.42, ov_score=0.71,
+        )
+        base.update(kw)
+        return PatternCandidate(**base)
+
+    def test_calibration_line_present(self):
+        msgs = build_messages(
+            {"nodes": [], "edges": []},
+            [self._candidate()])
+        user = msgs[1]["content"]
+        assert "calibration: final=0.610 wl=0.058 ov=0.710 fp=0.420" \
+               " struct=0.440 sem=0.430" in user
+        # 用法说明跟随候选列表（弱 wl 提示主干弱匹配）
+        assert "CALIBRATION LINE per candidate" in user
+        assert "weak <0.3" in user
+
+    def test_edge_level_difference_note(self):
+        """#71 变体形态：Δnode=0、Δedge≠0 → note 明确指示边级差异。"""
+        from backend.retrieval.features import generate_difference_note
+
+        inp = {"nodes": [{"kind": "address"}] * 4, "edges": [1] * 6}
+        cand = {"nodes": [{"kind": "address"}] * 4, "edges": [1] * 8}
+        note = generate_difference_note(inp, cand)
+        assert note is not None
+        assert "Node composition is identical" in note
+        assert "fewer edges (2 diff)" in note
+        assert "compare the value backbone" in note

@@ -32,7 +32,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v8"  # v8：删 no_match 档，rule 3 重写为 flagged_no_pattern 口径（issue #72）
+PROMPT_VERSION = "v9"  # v9：#71 校准透传（calibration 行 + 差异 note 边级口径）
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -69,7 +69,8 @@ behavior such as address-reuse returns, peel-and-return into coinjoin) with \
 recommended_action="review"; risk_level="low" only when no suspicious structure \
 is observed.
 4. Do not hallucinate transaction IDs or addresses.
-5. Confidence is a float between 0.0 and 1.0.
+5. Confidence is a float between 0.0 and 1.0. It expresses certainty in \
+the risk assessment, not in pattern matching.
 6. reasoning must reference specific structural features of the input subgraph.
 7. matched_pattern MUST be either null or the exact pattern_name of one of the \
 CANDIDATE PATTERNS listed in the input. Never invent a pattern name."""
@@ -271,6 +272,18 @@ def build_messages(subgraph, candidates, retry_note: str | None = None,
     lines.append("\nCANDIDATE PATTERNS:")
     if not candidates:
         lines.append("(none retrieved)")
+    else:
+        # issue #71（方案 C）：校准信号用法——预计算的结构相似度分数，
+        # 弱 wl（<0.3）提示主干结构弱匹配；中高分候选才值得结构对齐判断
+        lines.append(
+            "CALIBRATION LINE per candidate: final=blended ranking score, "
+            "wl=WL-kernel structural similarity (scale-invariant, weak <0.3 "
+            "suggests only partial structural correspondence), ov=output-edge "
+            "multiset overlap, fp=fingerprint similarity, struct/sem=stage-1 "
+            "structure/semantic channel scores. Use these to gauge how much "
+            "of the pattern is actually present; compare the value backbone "
+            "of small candidate topologies against the input, not exact "
+            "node/edge counts.")
     for c in candidates:
         name = _view(c, "name")
         desc = _view(c, "description", "") or ""
@@ -282,6 +295,18 @@ def build_messages(subgraph, candidates, retry_note: str | None = None,
         line = f"pattern_name: {name}\n  source: {source}\n  provenance: {provenance}"
         if provenance != "confirmed":
             line += "\n  evidence_status: not_real_on_chain_evidence"
+        # issue #71（方案 C）：精排校准信号透传——WL/overlap 分数已在检索侧
+        # 算好（PatternCandidate），旧口径只给 description，judge 被 ingest
+        # 模板的精确计数硬锚定，同簇变体（弱 WL 信号）被误判
+        line += (
+            "\n  calibration: final={:.3f} wl={:.3f} ov={:.3f} fp={:.3f} "
+            "struct={:.3f} sem={:.3f}".format(
+                _view(c, "similarity_score", 0.0) or 0.0,
+                _view(c, "wl_kernel_score", 0.0) or 0.0,
+                _view(c, "ov_score", 0.0) or 0.0,
+                _view(c, "fp_score", 0.0) or 0.0,
+                _view(c, "structural_similarity", 0.0) or 0.0,
+                _view(c, "semantic_similarity", 0.0) or 0.0))
         line += f"\n  {desc}"
         if note:
             line += f"\n  difference vs input: {note}"

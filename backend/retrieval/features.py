@@ -193,17 +193,32 @@ def generate_difference_note(input_graph: dict, candidate_graph: dict) -> str | 
     """差异说明提示（§6）——附加到 LLM prompt，说明输入子图与候选的结构差。
 
     差异小于阈值时返回 None（不值得占用 prompt 预算）。
+
+    issue #71：节点构成同构但差找零/分支边（Δnode=0、Δedge≠0）是同簇
+    变体的典型形态——旧口径 |Δnode|≤2 即静默（无任何校准），judge 只能
+    从 description 的精确计数硬锚定。改为 Δedge≠0 也生成 note。
     """
     in_nodes = input_graph.get("nodes", []) or []
     cand_nodes = candidate_graph.get("nodes", []) or []
+    in_edges = input_graph.get("edges", []) or []
+    cand_edges = candidate_graph.get("edges", []) or []
 
     def addr_count(nodes):
         return sum(1 for n in nodes if (_get(n, "kind") or "") == "address")
 
     delta = len(in_nodes) - len(cand_nodes)
     addr_delta = addr_count(in_nodes) - addr_count(cand_nodes)
-    if abs(delta) <= 2 and abs(addr_delta) <= 2:
+    edge_delta = len(in_edges) - len(cand_edges)
+    if abs(delta) <= 2 and abs(addr_delta) <= 2 and abs(edge_delta) == 0:
         return None
+    if abs(delta) <= 2 and abs(addr_delta) <= 2:
+        # #71 变体形态：节点构成相同、仅差找零/分支边——明确告诉 judge
+        # 差异是边级的，比较主干结构而非逐边计数
+        return (f"Node composition is identical, but the input has "
+                f"{'more' if edge_delta > 0 else 'fewer'} edges "
+                f"({abs(edge_delta)} diff); the extra edges are likely "
+                "change/self-spend or branch edges — compare the value "
+                "backbone, not exact edge counts.")
     if delta > 0:
         return (f"The input subgraph has {delta} more nodes than this pattern "
                 f"({addr_delta} more intermediate addresses); "
