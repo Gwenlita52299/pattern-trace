@@ -459,6 +459,12 @@ class TestPromptAndPerf:
         assert ("Confidence is a float between 0.0 and 1.0. It expresses "
                 "certainty in the risk assessment, not in pattern matching."
                 in SYSTEM_PROMPT)
+        # issue #83：confidence 锚定引导——校准分数映射到数值档
+        assert "flagged_no_pattern (matched=null, medium/high)" \
+               " with concrete anomalous behavior" in SYSTEM_PROMPT
+        assert "→ 0.80-0.95" in SYSTEM_PROMPT
+        assert "Never output the same confidence" not in SYSTEM_PROMPT \
+            or "Ground it in evidence" in SYSTEM_PROMPT
 
     def test_lj20_pipeline_overhead_p95_within_budget(self):
         delay_ms = 5  # CI 友好缩放：性质不变（扣除已知 mock 延迟后的管线开销）

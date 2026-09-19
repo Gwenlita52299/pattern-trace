@@ -32,7 +32,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v9"  # v9：#71 校准透传（calibration 行 + 差异 note 边级口径）
+PROMPT_VERSION = "v10"  # v10：#83 方案 A——confidence 锚定引导（校准分数 → 数值档）
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -70,7 +70,15 @@ recommended_action="review"; risk_level="low" only when no suspicious structure 
 is observed.
 4. Do not hallucinate transaction IDs or addresses.
 5. Confidence is a float between 0.0 and 1.0. It expresses certainty in \
-the risk assessment, not in pattern matching.
+the risk assessment, not in pattern matching. Ground it in evidence \
+strength — do NOT collapse different situations to the same value: \
+- matched pattern with strong calibration (final>=0.6 and wl>=0.4) \
+→ 0.80-0.95;
+- KB match with partial correspondence → 0.60-0.75;
+- flagged_no_pattern (matched=null, medium/high) with concrete anomalous \
+behavior (address-reuse return, peel-and-return into coinjoin) → 0.65-0.85;
+- flagged_no_pattern with weak or generic suspicion → 0.40-0.60;
+- low risk with no suspicious structure → 0.20-0.40.
 6. reasoning must reference specific structural features of the input subgraph.
 7. matched_pattern MUST be either null or the exact pattern_name of one of the \
 CANDIDATE PATTERNS listed in the input. Never invent a pattern name."""
@@ -283,7 +291,8 @@ def build_messages(subgraph, candidates, retry_note: str | None = None,
             "structure/semantic channel scores. Use these to gauge how much "
             "of the pattern is actually present; compare the value backbone "
             "of small candidate topologies against the input, not exact "
-            "node/edge counts.")
+            "node/edge counts. Reflect the strongest calibration evidence "
+            "in confidence (rule 5).")
     for c in candidates:
         name = _view(c, "name")
         desc = _view(c, "description", "") or ""
