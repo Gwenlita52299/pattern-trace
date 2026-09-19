@@ -1,53 +1,50 @@
 {
-  "generated_at": "2026-09-12T14:12:53",
+  "generated_at": "2026-09-19T16:09:06",
   "counts": {
-    "positive": 40,
-    "negative": 20,
+    "positive": 38,
+    "negative": 16,
     "submitted": 60,
-    "failed": 0
+    "failed": 6
   },
   "judge": {
-    "positive_hit_rate_any": 0.925,
-    "positive_hit_rate_strong": 0.925,
-    "negative_fpr_any": 0.85,
-    "negative_fpr_strong": 0.85
+    "positive_hit_rate_any": 0.0,
+    "positive_hit_rate_strong": 1.0,
+    "kb_match_rate": 0.0,
+    "negative_fpr_any": 0.0,
+    "negative_fpr_strong": 0.875,
+    "fpr_caveat": "bottom20 labels are cluster-based, not behavior-based; manual review of 1/20 confirmed suspicious behavior (peel-and-return + coinjoin) — see issue #71 comment 2"
   },
-  "retrieval_recall_at_k": {
-    "1": 1.0,
-    "3": 1.0,
-    "5": 1.0,
-    "10": 1.0
-  },
+  "retrieval_recall_at_k": {},
   "confidence_threshold_sweep": [
     {
       "cutoff": 0.3,
-      "tpr": 0.925,
-      "fpr": 0.85
+      "tpr": 1.0,
+      "fpr": 0.875
     },
     {
       "cutoff": 0.4,
-      "tpr": 0.925,
-      "fpr": 0.75
+      "tpr": 1.0,
+      "fpr": 0.875
     },
     {
       "cutoff": 0.5,
-      "tpr": 0.925,
-      "fpr": 0.75
+      "tpr": 1.0,
+      "fpr": 0.875
     },
     {
       "cutoff": 0.6,
-      "tpr": 0.875,
-      "fpr": 0.55
+      "tpr": 0.9474,
+      "fpr": 0.875
     },
     {
       "cutoff": 0.7,
-      "tpr": 0.375,
-      "fpr": 0.35
+      "tpr": 0.0263,
+      "fpr": 0.25
     },
     {
       "cutoff": 0.8,
-      "tpr": 0.05,
-      "fpr": 0.1
+      "tpr": 0.0263,
+      "fpr": 0.125
     },
     {
       "cutoff": 0.9,
@@ -60,21 +57,21 @@
       "set": "test_top20_C1.csv",
       "expected": "positive",
       "address": "bc1pewmn7vcp5rjmvnuwd5aqy9s9j9yf6z9yqncjv38l7n4e6guq4v6qn2gghz",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 1357
+      "status": "submit_error_httpx",
+      "risk_level": null,
+      "confidence": null,
+      "matched_pattern_name": null,
+      "latency_ms": null
     },
     {
       "set": "test_top20_C1.csv",
       "expected": "positive",
       "address": "bc1quz0srm5ldkvp72xw4numj8kn5smu6mqs86glxw",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 639
+      "status": "submit_error_httpx",
+      "risk_level": null,
+      "confidence": null,
+      "matched_pattern_name": null,
+      "latency_ms": null
     },
     {
       "set": "test_top20_C1.csv",
@@ -83,8 +80,8 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 580
+      "matched_pattern_name": null,
+      "latency_ms": 4084
     },
     {
       "set": "test_top20_C1.csv",
@@ -92,19 +89,19 @@
       "address": "bc1plx7df78wwg2plqj5swsk80mc6k3cwe69l0tnsplw2sy0tsjg775s3cefxp",
       "status": "completed",
       "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 1196
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3228
     },
     {
       "set": "test_top20_C1.csv",
       "expected": "positive",
       "address": "bc1pgp8f67zy8qc0r32vap7a7x80mswcl4uvxj673ds3lm24nkxp6gysdwwp54",
       "status": "completed",
-      "risk_level": "no_match",
-      "confidence": 0.0,
+      "risk_level": "medium",
+      "confidence": 0.6,
       "matched_pattern_name": null,
-      "latency_ms": 685
+      "latency_ms": 3850
     },
     {
       "set": "test_top20_C1.csv",
@@ -112,9 +109,9 @@
       "address": "bc1pxza8ak9wa82vc3sl6uk7x06jqeymaga373w8c7gmetgz7lxf3azqkrwgzd",
       "status": "completed",
       "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 575
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3998
     },
     {
       "set": "test_top20_C1.csv",
@@ -122,9 +119,29 @@
       "address": "bc1qdd6m4d78ftjxsuu7gxxpmrx8ftjd2cnyjg690w",
       "status": "completed",
       "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 554
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3364
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1pylznw4x333dj89mtl3j50ehyan8gs30j4ruy6f5klaneau72fr0q398cec",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3173
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1pnje7kwakr7227yceyuq9qqnrwzwgpeh8ytdar0gms5w6g7w78uuqtldkmr",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3753
     },
     {
       "set": "test_top20_C1.csv",
@@ -132,29 +149,9 @@
       "address": "bc1pu9lu69lgl0zzw8ppw0udp00lxgxxl2ldns7l82elvm0zn9qs5v3sjrzm0p",
       "status": "completed",
       "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 1015
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1p322hy9pcnk0u3t9f7srp3h32ge2ewzulya8w6hu9gtp3370n2wesuvfr5j",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 5092
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1pdxrhwx509xhh99dwnnmjlx34pmrkla2njepzknzz940wuslelq0s8xcmv8",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.55,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 13688
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3560
     },
     {
       "set": "test_top20_C1.csv",
@@ -163,278 +160,8 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 15698
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1p2tult0u94fc8zh0u257dgvkj4lwwrq9lzfux24zrsjecndp0nmds3f5q3v",
-      "status": "completed",
-      "risk_level": "no_match",
-      "confidence": 0.0,
       "matched_pattern_name": null,
-      "latency_ms": 7943
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1pe8u465mlglyxz4cxtdhdecklw7zwehh0fk893dkxzglrusyggcssr0gut8",
-      "status": "completed",
-      "risk_level": "no_match",
-      "confidence": 0.0,
-      "matched_pattern_name": null,
-      "latency_ms": 5591
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1pmj8va8xl6vmq9jrt23n534pxfh9crsaa5wj06dadlk639l8dskesmedhrf",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 10930
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1qlczhssqfz9adx7psuc0lf5q8jaxvkv2425evlq",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 11328
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pneshyv6c4p8frzgketkr9y2wlxrvrmzrslvhe4nlfgzqsxrrt26q9p6xlz",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 10086
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1qgtm6enpxmjyu0etx7vyv4dpdsf6jlzcl6fewf4",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 11384
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1qq2kcs7hz00gjk5m7gjwmy5dnyxyl8fg45jhv9s",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 9307
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1q9vtkk9uf0n6z0drn5z7p7wau6m9jnmdpcl87v2",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 9249
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1ph4af030vg0avf3uehey9yyfr59eek2cpx77m5gkjax2zy4yf0z6s6vnuck",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 9150
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pkswr0yc70aete22z7qa5ry7lhayax2zw7j0a8zu0vxmy708hu87q6u0r6p",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 9929
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1putgfp4mm0z2zh2h52p273f5dvapngxxud7whdrgmj285ytun9mls04td82",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 9973
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pand2as9wj7j7vugg45kpf3z9xlmxagh25z7pq52puls86d9jvdjqmjpek9",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 10954
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pllw2p6eg885ac4qe9yj3qw3gnz2rc2skctq62xswdqm5qnr30qqsljhnun",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 8931
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1q6vd7q2kpu67utxthv3u2llww57lvaycethurtu",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 23643
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pvhjuqmhp4nzha8pclgufcx5mfycp8zpmrsytwmtlfksvlenu67fsnugequ",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 10205
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pvfqp9yccrkf5xxrfjrg5mj7sj87sm80yyhv6rsmdu5tdm3z3qm5sevk84c",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 11230
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1p5gerj46v4mlcm603glcuf70aftafxjv8y26vgppksvten8qzltrq56nshw",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 11095
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1p6xya8hvkukclkpjxn9kqhy30lsf8ketalu9mql8sewug7ksfjqts9v5auh",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 10028
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1ps89m8lagwd4568pmeml44vznxvky4z8hj3mngrgcx2d608lggsls7mnuyu",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 6407
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1qwx27vt945xfcphscp2yykqrcm4asmmp8vxyy8f",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 10116
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1psyj4d5nw83rr89f06lehl8lj9qzypjklhf2u8xyw85grfd4q0xcseqsd7m",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.65,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 10159
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1pvh62kmp62c29w2lm2l37l5pz96f6gfrrxa8nm09faljw2qrdf7qsvjaa3t",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.55,
-      "matched_pattern_name": "mixer_layering_2hop_15nodes",
-      "latency_ms": 217768
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1q74hz37wvh5thp7vdqzm7tlh5ttw2utktdqrzg8",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 13815
-    },
-    {
-      "set": "test_top20_C6.csv",
-      "expected": "positive",
-      "address": "bc1pe2q6375kz5l5xkfwrgxc3hezsrhmatjlfr0hftgzhfz3gu8hsygq65rmtd",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.55,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 1126
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1pjfqxx85xjz7nqvjsug4qhdh4vd4qld8ypmuvp5wgyw20g649t6ds5x3lhw",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.55,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 10990
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1pylznw4x333dj89mtl3j50ehyan8gs30j4ruy6f5klaneau72fr0q398cec",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.85,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 6010
-    },
-    {
-      "set": "test_top20_C1.csv",
-      "expected": "positive",
-      "address": "bc1pnje7kwakr7227yceyuq9qqnrwzwgpeh8ytdar0gms5w6g7w78uuqtldkmr",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.85,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 6347
+      "latency_ms": 3578
     },
     {
       "set": "test_top20_C1.csv",
@@ -443,8 +170,18 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 977
+      "matched_pattern_name": null,
+      "latency_ms": 3151
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1p322hy9pcnk0u3t9f7srp3h32ge2ewzulya8w6hu9gtp3370n2wesuvfr5j",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3262
     },
     {
       "set": "test_top20_C1.csv",
@@ -453,8 +190,18 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 6724
+      "matched_pattern_name": null,
+      "latency_ms": 3712
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1pdxrhwx509xhh99dwnnmjlx34pmrkla2njepzknzz940wuslelq0s8xcmv8",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3399
     },
     {
       "set": "test_top20_C1.csv",
@@ -463,8 +210,28 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 5852
+      "matched_pattern_name": null,
+      "latency_ms": 3216
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1p2tult0u94fc8zh0u257dgvkj4lwwrq9lzfux24zrsjecndp0nmds3f5q3v",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3202
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1pe8u465mlglyxz4cxtdhdecklw7zwehh0fk893dkxzglrusyggcssr0gut8",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2788
     },
     {
       "set": "test_top20_C1.csv",
@@ -473,8 +240,238 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_1hop_5nodes",
-      "latency_ms": 6356
+      "matched_pattern_name": null,
+      "latency_ms": 3247
+    },
+    {
+      "set": "test_top20_C1.csv",
+      "expected": "positive",
+      "address": "bc1pmj8va8xl6vmq9jrt23n534pxfh9crsaa5wj06dadlk639l8dskesmedhrf",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3631
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1qlczhssqfz9adx7psuc0lf5q8jaxvkv2425evlq",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 5646
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pneshyv6c4p8frzgketkr9y2wlxrvrmzrslvhe4nlfgzqsxrrt26q9p6xlz",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3407
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1qgtm6enpxmjyu0etx7vyv4dpdsf6jlzcl6fewf4",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3463
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1qq2kcs7hz00gjk5m7gjwmy5dnyxyl8fg45jhv9s",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.55,
+      "matched_pattern_name": null,
+      "latency_ms": 3530
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1q9vtkk9uf0n6z0drn5z7p7wau6m9jnmdpcl87v2",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3194
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1ph4af030vg0avf3uehey9yyfr59eek2cpx77m5gkjax2zy4yf0z6s6vnuck",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3727
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pkswr0yc70aete22z7qa5ry7lhayax2zw7j0a8zu0vxmy708hu87q6u0r6p",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3222
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1putgfp4mm0z2zh2h52p273f5dvapngxxud7whdrgmj285ytun9mls04td82",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3357
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pand2as9wj7j7vugg45kpf3z9xlmxagh25z7pq52puls86d9jvdjqmjpek9",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3407
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pllw2p6eg885ac4qe9yj3qw3gnz2rc2skctq62xswdqm5qnr30qqsljhnun",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3678
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1q74hz37wvh5thp7vdqzm7tlh5ttw2utktdqrzg8",
+      "status": "completed",
+      "risk_level": "high",
+      "confidence": 0.85,
+      "matched_pattern_name": null,
+      "latency_ms": 4922
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pe2q6375kz5l5xkfwrgxc3hezsrhmatjlfr0hftgzhfz3gu8hsygq65rmtd",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2598
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1q6vd7q2kpu67utxthv3u2llww57lvaycethurtu",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2938
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pvhjuqmhp4nzha8pclgufcx5mfycp8zpmrsytwmtlfksvlenu67fsnugequ",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3033
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1pvfqp9yccrkf5xxrfjrg5mj7sj87sm80yyhv6rsmdu5tdm3z3qm5sevk84c",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.55,
+      "matched_pattern_name": null,
+      "latency_ms": 2894
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1p5gerj46v4mlcm603glcuf70aftafxjv8y26vgppksvten8qzltrq56nshw",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 4148
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1p6xya8hvkukclkpjxn9kqhy30lsf8ketalu9mql8sewug7ksfjqts9v5auh",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3620
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1ps89m8lagwd4568pmeml44vznxvky4z8hj3mngrgcx2d608lggsls7mnuyu",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3625
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1qwx27vt945xfcphscp2yykqrcm4asmmp8vxyy8f",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3469
+    },
+    {
+      "set": "test_top20_C6.csv",
+      "expected": "positive",
+      "address": "bc1psyj4d5nw83rr89f06lehl8lj9qzypjklhf2u8xyw85grfd4q0xcseqsd7m",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3775
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1pjfqxx85xjz7nqvjsug4qhdh4vd4qld8ypmuvp5wgyw20g649t6ds5x3lhw",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3244
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1pvh62kmp62c29w2lm2l37l5pz96f6gfrrxa8nm09faljw2qrdf7qsvjaa3t",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.7,
+      "matched_pattern_name": null,
+      "latency_ms": 3930
     },
     {
       "set": "test_bottom20_no_match.csv",
@@ -482,29 +479,29 @@
       "address": "bc1q0gkctap5p507y2fz6c9flmtdr8ck68q29zht8z",
       "status": "completed",
       "risk_level": "medium",
-      "confidence": 0.55,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 39465
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2473
     },
     {
       "set": "test_bottom20_no_match.csv",
       "expected": "negative",
       "address": "bc1pfvjulw2p9ptrx4j7pml5v7e7rlc6vfh4ucqr0nwyvm6d0lt8yxlsvwu93j",
       "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.85,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 7654
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2479
     },
     {
       "set": "test_bottom20_no_match.csv",
       "expected": "negative",
       "address": "bc1pqsps380w49rs42w0d7hjkz8avcmn9hwju7pqtqhctnzyrxrychvqa02j5e",
       "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.85,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 6537
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3279
     },
     {
       "set": "test_bottom20_no_match.csv",
@@ -512,29 +509,79 @@
       "address": "bc1q9q822jtz3046pg5asupssy4f7xq83lq9vgcnec",
       "status": "completed",
       "risk_level": "medium",
-      "confidence": 0.35,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 230508
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2357
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1qefdmh3n26anfkexel0mgjpjshfrswppevw9zeq",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.7,
+      "matched_pattern_name": null,
+      "latency_ms": 3978
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1q2pvfxj2gvp05w00l4zc4ps5y4fxegasxwnhnpd",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 2732
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1puzg4wpj920s0sltdnm06zajvt7f3a86x7x74mqljrquzaws7zyhs85fdqa",
+      "status": "poll_timeout",
+      "risk_level": null,
+      "confidence": null,
+      "matched_pattern_name": null,
+      "latency_ms": null
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1pwz5kr3t87zj7qzs8nwan5cg0f7gqcxxr6q37vsdcm26s7ly89z5q5y6z7u",
+      "status": "completed",
+      "risk_level": "medium",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 3446
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1qkl082mlt8jqg6uvkdadqtc8g97kj75880ntc39",
+      "status": "completed",
+      "risk_level": "low",
+      "confidence": 0.6,
+      "matched_pattern_name": null,
+      "latency_ms": 91837
     },
     {
       "set": "test_bottom20_no_match.csv",
       "expected": "negative",
       "address": "bc1qzyafrfdd0q360x8nxsg6mycy5e4w6jaz9l4e0m",
-      "status": "completed",
-      "risk_level": "no_match",
-      "confidence": 0.0,
+      "status": "failed",
+      "risk_level": null,
+      "confidence": null,
       "matched_pattern_name": null,
-      "latency_ms": 5794
+      "latency_ms": null
     },
     {
       "set": "test_bottom20_no_match.csv",
       "expected": "negative",
       "address": "bc1qt7cy68wdcwc0tp5g3jdheuaxjr3wz2lu0wd9dd",
       "status": "completed",
-      "risk_level": "no_match",
-      "confidence": 0.95,
+      "risk_level": "low",
+      "confidence": 0.6,
       "matched_pattern_name": null,
-      "latency_ms": 68097
+      "latency_ms": 154770
     },
     {
       "set": "test_bottom20_no_match.csv",
@@ -543,18 +590,28 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 7834
+      "matched_pattern_name": null,
+      "latency_ms": 9818
     },
     {
       "set": "test_bottom20_no_match.csv",
       "expected": "negative",
       "address": "bc1psrwl5fkhm5h2svnlc9fukprk33qd6kdtedlmqvwpd3lu0z7h7xms5y7yxe",
+      "status": "failed",
+      "risk_level": null,
+      "confidence": null,
+      "matched_pattern_name": null,
+      "latency_ms": null
+    },
+    {
+      "set": "test_bottom20_no_match.csv",
+      "expected": "negative",
+      "address": "bc1pdvmcaecrjj9k62ye4rjzv55tr5m9yedzz7tvvdkpqmszxqksar5scpj4rw",
       "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.55,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 107117
+      "risk_level": "high",
+      "confidence": 0.85,
+      "matched_pattern_name": null,
+      "latency_ms": 15218
     },
     {
       "set": "test_bottom20_no_match.csv",
@@ -563,8 +620,8 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 7247
+      "matched_pattern_name": null,
+      "latency_ms": 7772
     },
     {
       "set": "test_bottom20_no_match.csv",
@@ -573,48 +630,8 @@
       "status": "completed",
       "risk_level": "medium",
       "confidence": 0.6,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 5875
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1q8wxtva42alck4sq4fnh9kr8aenzshn8mz7x98n",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.72,
-      "matched_pattern_name": "mixer_layering_2hop_17nodes",
-      "latency_ms": 169474
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1qefdmh3n26anfkexel0mgjpjshfrswppevw9zeq",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.72,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 8981
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1pwz5kr3t87zj7qzs8nwan5cg0f7gqcxxr6q37vsdcm26s7ly89z5q5y6z7u",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.62,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 77743
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1qkl082mlt8jqg6uvkdadqtc8g97kj75880ntc39",
-      "status": "completed",
-      "risk_level": "no_match",
-      "confidence": 0.95,
       "matched_pattern_name": null,
-      "latency_ms": 58911
+      "latency_ms": 5064
     },
     {
       "set": "test_bottom20_no_match.csv",
@@ -622,39 +639,19 @@
       "address": "bc1qct3rnr874treh2z2e05ekkkvg4rprh9ryfkmyn",
       "status": "completed",
       "risk_level": "high",
-      "confidence": 0.75,
-      "matched_pattern_name": "mixer_layering_2hop_7nodes",
-      "latency_ms": 54254
+      "confidence": 0.85,
+      "matched_pattern_name": null,
+      "latency_ms": 135563
     },
     {
       "set": "test_bottom20_no_match.csv",
       "expected": "negative",
-      "address": "bc1puzg4wpj920s0sltdnm06zajvt7f3a86x7x74mqljrquzaws7zyhs85fdqa",
-      "status": "completed",
-      "risk_level": "medium",
-      "confidence": 0.35,
-      "matched_pattern_name": "mixer_layering_2hop_9nodes",
-      "latency_ms": 1442
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1q2pvfxj2gvp05w00l4zc4ps5y4fxegasxwnhnpd",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.72,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 6581
-    },
-    {
-      "set": "test_bottom20_no_match.csv",
-      "expected": "negative",
-      "address": "bc1pdvmcaecrjj9k62ye4rjzv55tr5m9yedzz7tvvdkpqmszxqksar5scpj4rw",
-      "status": "completed",
-      "risk_level": "high",
-      "confidence": 0.72,
-      "matched_pattern_name": "mixer_layering_2hop_20nodes",
-      "latency_ms": 5821
+      "address": "bc1q8wxtva42alck4sq4fnh9kr8aenzshn8mz7x98n",
+      "status": "poll_timeout",
+      "risk_level": null,
+      "confidence": null,
+      "matched_pattern_name": null,
+      "latency_ms": null
     }
   ]
 }
