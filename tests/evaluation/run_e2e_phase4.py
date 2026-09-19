@@ -102,7 +102,7 @@ def run_pipeline(client, auth: dict | None) -> int:
     if payload.get("status") == "completed":
         risk = payload.get("risk_level")
         check("risk_level in enum",
-              risk in {"high", "medium", "low", "no_match"}, str(risk))
+              risk in {"high", "medium", "low"}, str(risk))
         check("confidence in [0,1]",
               0.0 <= (payload.get("confidence") or 0.0) <= 1.0,
               str(payload.get("confidence")))
@@ -182,19 +182,22 @@ def run_pipeline(client, auth: dict | None) -> int:
           fpayload.get("risk_level") is None
           and fpayload.get("confidence") is None)
 
-    # ---- no_match 用例（issue #78：确定性 no_match 走完整管线）----
+    # ---- flagged_no_pattern 用例（issue #72：mock 场景 matched=null + medium；
+    # 枚举重构后确定性 no_match 语义并入此档，走完整管线）----
     r = client.post("/api/v1/addresses/analyze",
                     json={"address": demo_addr, "hops": 1,
                           "mock_scenario": "valid_no_match"})
     nid = r.json()["judgment_id"]
     npayload = _poll(client, nid, auth)
-    check("no_match completed", npayload.get("status") == "completed",
+    check("flagged_no_pattern completed",
+          npayload.get("status") == "completed",
           str({k: npayload.get(k) for k in ("status", "error_code")}))
-    check("no_match risk_level", npayload.get("risk_level") == "no_match",
+    check("flagged_no_pattern risk medium",
+          npayload.get("risk_level") == "medium",
           str(npayload.get("risk_level")))
-    check("no_match matched_pattern null",
+    check("flagged_no_pattern matched_pattern null",
           npayload.get("matched_pattern_name") is None)
-    check("no_match recommended_action review",
+    check("flagged_no_pattern recommended_action review",
           npayload.get("recommended_action") == "review",
           str(npayload.get("recommended_action")))
     check("no_match evidence empty by contract",

@@ -269,10 +269,12 @@ class MockLLMClient(LLMClient):
             # 其余调用落入下方 valid 分支
 
         if self.scenario in ("valid_no_match", "no_match"):
+            # issue #72：枚举重构后 no_match 档已删除——场景语义变为
+            # flagged_no_pattern（matched=null + medium + review）
             return json.dumps({
-                "risk_level": "no_match", "matched_pattern": None,
-                "confidence": 0.82, "evidence": [],
-                "reasoning": "no structural correspondence with any known pattern",
+                "risk_level": "medium", "matched_pattern": None,
+                "confidence": 0.55, "evidence": [],
+                "reasoning": "suspicious structure but no KB correspondence",
                 "recommended_action": "review",
             })
         if self.scenario == "valid_low":
@@ -296,11 +298,13 @@ class MockLLMClient(LLMClient):
             raise httpx.HTTPStatusError(
                 "simulated provider rate limit", request=resp.request,
                 response=resp)
+        # issue #72：无候选 → matched=null → high 必须 review
+        # （flagged_no_pattern 校验强制）；有匹配才可 freeze
         return json.dumps({
             "risk_level": "high", "matched_pattern": matched,
             "confidence": 0.91, "evidence": ids[:3],
             "reasoning": f"subgraph shows layering consistent with {matched or 'known mixing playbook'}",
-            "recommended_action": "freeze",
+            "recommended_action": "freeze" if matched else "review",
         })
 
 

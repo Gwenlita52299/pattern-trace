@@ -185,7 +185,7 @@ class Judgment(Base):
     # completed 产物
     subgraph_snapshot = Column(JSONB)   # canonical 子图（节点/边 D3 ID 空间）
     subgraph_hash = Column(String(64))  # canonical_subgraph_hash，缓存 key 成员
-    risk_level = Column(String(20))     # high | medium | low | no_match
+    risk_level = Column(String(20))     # high | medium | low（#72 删 no_match；历史行保留旧值）
     matched_pattern_id = Column(String(36))
     matched_pattern_name = Column(String(120))
     confidence = Column(Float)

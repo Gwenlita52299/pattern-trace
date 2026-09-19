@@ -255,7 +255,7 @@ class TestPipeline:
         payload = _poll_terminal(api_client, jid)
 
         assert payload["status"] == "completed", payload
-        assert payload["risk_level"] in {"high", "medium", "low", "no_match"}
+        assert payload["risk_level"] in {"high", "medium", "low"}
         assert payload["model"] and payload["prompt_version"] \
             and payload["builder_version"]
         assert isinstance(payload["latency_ms"], int)

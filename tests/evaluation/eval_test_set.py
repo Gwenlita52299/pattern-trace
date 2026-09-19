@@ -157,7 +157,9 @@ def phase_report(raw: list[dict]) -> int:
 
     # ---- judge 层指标 ----
     def hit(r):
-        return r["risk_level"] != "no_match"
+        # issue #72：枚举重构后 positive 判定 = matched_pattern 非 null
+        # （"risk != no_match" 的旧口径随枚举删除失效）
+        return r.get("matched_pattern") is not None
 
     def strong_hit(r):
         return r["risk_level"] in ("high", "medium")

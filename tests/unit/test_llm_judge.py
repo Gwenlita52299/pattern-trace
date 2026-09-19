@@ -175,7 +175,7 @@ class TestParseAndValidate:
     def test_lj02_valid_input_passes(self):
         result = parse_and_validate(_verdict_json(), VALID_IDS)
         assert isinstance(result, JudgmentResult)
-        assert result.risk_level in {"high", "medium", "low", "no_match"}
+        assert result.risk_level in {"high", "medium", "low"}
         assert 0.0 <= result.confidence <= 1.0
         assert result.recommended_action in {"freeze", "monitor", "review", "none"}
 
@@ -185,15 +185,26 @@ class TestParseAndValidate:
                 _verdict_json(evidence=("tx:nonexistent",)), VALID_IDS)
         assert "tx:nonexistent" in exc_info.value.invalid_ids
 
-    def test_lj10_no_match_requires_review_action(self):
+    def test_lj10_flagged_no_pattern_requires_review_action(self):
+        """issue #72：matched=null 且 risk∈{medium,high} 必须上报 review。"""
         with pytest.raises(JudgmentValidationError, match="review"):
-            parse_and_validate(_verdict_json(risk="no_match", action="freeze",
+            parse_and_validate(_verdict_json(risk="medium", action="freeze",
+                                             matched=None), VALID_IDS)
+        with pytest.raises(JudgmentValidationError, match="review"):
+            parse_and_validate(_verdict_json(risk="high", action="monitor",
                                              matched=None), VALID_IDS)
 
-    def test_lj11_no_match_requires_null_pattern(self):
-        with pytest.raises(JudgmentValidationError, match="matched_pattern"):
-            parse_and_validate(_verdict_json(risk="no_match", action="review",
-                                             matched="mixer_layering"), VALID_IDS)
+    def test_lj11_old_no_match_output_rejected(self):
+        """issue #72：no_match 不再是合法枚举——旧口径输出直接拒（重试）。"""
+        assert parse_and_validate(_verdict_json(risk="no_match", action="review",
+                                                matched=None), VALID_IDS) is None
+
+    def test_flagged_no_pattern_valid_low_null_allows_any_action(self):
+        """matched=null + low：无可疑结构，放行语义合法（review/monitor 皆可）。"""
+        for action in ("review", "monitor", "none"):
+            result = parse_and_validate(_verdict_json(risk="low", action=action,
+                                                      matched=None), VALID_IDS)
+            assert result.risk_level == "low"
 
     def test_lj12_confidence_out_of_range_returns_none(self):
         assert parse_and_validate(_verdict_json(confidence=1.5), VALID_IDS) is None
@@ -441,8 +452,8 @@ class TestPromptAndPerf:
         assert "Output ONLY valid JSON" in SYSTEM_PROMPT
         assert 'Every ID in the "evidence" array MUST be an address node id' \
                in SYSTEM_PROMPT
-        assert 'If no pattern matches, output risk_level="no_match" ' \
-               'and recommended_action="review".' in SYSTEM_PROMPT
+        assert 'Matching state is expressed ONLY by matched_pattern' \
+               in SYSTEM_PROMPT
         assert "Do not hallucinate transaction IDs or addresses." in SYSTEM_PROMPT
         assert "Confidence is a float between 0.0 and 1.0." in SYSTEM_PROMPT
 

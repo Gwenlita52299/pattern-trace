@@ -1,4 +1,4 @@
-"""阶段5 种子案例：high / low / no_match 三档各一（排期完成标志）。
+"""阶段5 种子案例：high / medium / low 三档各一（排期完成标志，#72 枚举重构）。
 
 幂等：按案件标题判存——已存在且关联地址已有 completed judgment 时跳过，
 可安全重复执行。判定走完整管线（fixture 数据源 + mock provider），
@@ -156,7 +156,7 @@ if __name__ == "__main__":
     summary = asyncio.run(run())
     # 成功口径：跳过（已就绪）或产出三档之一的 verdict
     ok = all(r["status"] == "skipped"
-             or r.get("risk") in ("high", "low", "no_match")
+             or r.get("risk") in ("high", "medium", "low")
              for r in summary)
     print(f"seed cases: {summary}")
     raise SystemExit(0 if ok else 1)

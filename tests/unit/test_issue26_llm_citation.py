@@ -52,8 +52,8 @@ class TestParseAndValidate:
 
     def test_null_pattern_accepted_with_candidates(self):
         result = parse_and_validate(
-            _verdict_json(matched=None), VALID_IDS,
-            candidate_names=CANDIDATE_NAMES)
+            _verdict_json(risk="medium", action="review", matched=None),
+            VALID_IDS, candidate_names=CANDIDATE_NAMES)
         assert result.matched_pattern is None
 
     def test_none_candidate_names_skips_check(self):
@@ -117,11 +117,12 @@ class TestJudgeIntegration:
                 address="bc1qtest", subgraph=subgraph,
                 candidate_names=CANDIDATE_NAMES))
 
-    def test_no_match_with_null_pattern_still_valid(self):
+    def test_null_pattern_with_medium_is_valid_flagged_no_pattern(self):
+        """issue #72：matched=null + medium = flagged_no_pattern（合法落点）。"""
         result = parse_and_validate(
-            _verdict_json(risk="no_match", action="review", matched=None),
+            _verdict_json(risk="medium", action="review", matched=None),
             VALID_IDS, candidate_names=CANDIDATE_NAMES)
-        assert result.risk_level == "no_match"
+        assert result.risk_level == "medium"
         assert result.matched_pattern is None
 
 

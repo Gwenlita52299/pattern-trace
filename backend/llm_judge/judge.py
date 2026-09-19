@@ -2,7 +2,8 @@
 
 校验失败契约（LJ 用例统一口径）：
 - 格式类失败（JSON 坏 / 字段缺失 / confidence 越界）→ 返回 None，触发通用重试；
-- 规则类失败（evidence 引用越界 / no_match 语义违规）→ 抛 JudgmentValidationError，
+- 规则类失败（evidence 引用越界 / flagged_no_pattern 语义违规）→ 抛
+  JudgmentValidationError，
   携带具体非法 ID 列表供重试提示注入；编排层捕获计数，耗尽后上抛。
 仅校验通过的结果才允许写入缓存。
 """
@@ -24,10 +25,14 @@ class JudgmentValidationError(Exception):
         self.invalid_ids = invalid_ids or []
 
 
-VALID_RISK_LEVELS = {"high", "medium", "low", "no_match"}
+# issue #72：risk_level 与匹配状态解耦（枚举重构，删除 no_match 档）。
+# 匹配状态由 matched_pattern 是否为 null 表达；matched=null 且 risk∈{medium,high}
+# = flagged_no_pattern（风险成立但无 KB 匹配），硬校验强制 action=review。
+# confidence 全档统一为「对风险等级成立的确信度」，跨档可比。
+VALID_RISK_LEVELS = {"high", "medium", "low"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v7"  # v7：evidence 数量上限 8（大子图下超长列表截断导致校验失败）
+PROMPT_VERSION = "v8"  # v8：删 no_match 档，rule 3 重写为 flagged_no_pattern 口径（issue #72）
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -36,7 +41,7 @@ BUILDER_VERSION = "gb-v1"
 SCHEMA: dict = {
     "type": "object",
     "properties": {
-        "risk_level": {"enum": ["high", "medium", "low", "no_match"]},
+        "risk_level": {"enum": ["high", "medium", "low"]},
         "matched_pattern": {"type": ["string", "null"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "evidence": {"type": "array", "items": {"type": "string"}},
@@ -57,7 +62,12 @@ Rules:
 ("addr:...") from the input subgraph. Cite addresses only — never \
 transaction or edge IDs. Cite AT MOST 8 addresses: choose the strongest \
 evidence only (long evidence lists get truncated and fail validation).
-3. If no pattern matches, output risk_level="no_match" and recommended_action="review".
+3. Matching state is expressed ONLY by matched_pattern (null = no KB match), \
+never by risk_level. If no pattern matches, judge the observed risk directly: \
+risk_level="medium" or "high" for suspicious structure (mixer contact, anomalous \
+behavior such as address-reuse returns, peel-and-return into coinjoin) with \
+recommended_action="review"; risk_level="low" only when no suspicious structure \
+is observed.
 4. Do not hallucinate transaction IDs or addresses.
 5. Confidence is a float between 0.0 and 1.0.
 6. reasoning must reference specific structural features of the input subgraph.
@@ -151,7 +161,10 @@ def parse_and_validate(raw: str, valid_ids: set[str],
 
     - JSON 不可解析 / required 缺失 / 枚举非法 / confidence ∉ [0,1] → None
     - evidence 引用 ⊄ 子图 ID 空间 → JudgmentValidationError(含非法 ID 列表)
-    - no_match 但 action≠review 或 matched_pattern 非 null → 异常（prompt rule 3）
+    - risk 枚举非法（issue #72：{high,medium,low}）→ None
+    - evidence 引用 ⊄ 子图 ID 空间 → JudgmentValidationError(含非法 ID 列表)
+    - matched=null 且 risk∈{medium,high} 但 action≠review → 异常
+      （flagged_no_pattern 口径，issue #72）
     - issue #26：matched_pattern 非 null 时必须是本次检索候选名称之一；
       候选为空时必须为 null。candidate_names=None 时跳过该检查（直调兼容）
     """
@@ -194,13 +207,14 @@ def parse_and_validate(raw: str, valid_ids: set[str],
             "CANDIDATE PATTERNS or null",
             invalid_ids=[matched],
         )
-    if data["risk_level"] == "no_match":
-        if data["recommended_action"] != "review":
-            raise JudgmentValidationError(
-                'no_match requires recommended_action="review" (prompt rule 3)')
-        if data["matched_pattern"] is not None:
-            raise JudgmentValidationError(
-                "no_match requires matched_pattern=null")
+    # issue #72：matched=null 且 risk∈{medium,high}（flagged_no_pattern）→
+    # 风险成立但无 KB 匹配，必须上报人工复查，不得静默放行
+    if data["matched_pattern"] is None \
+            and data["risk_level"] in ("medium", "high") \
+            and data["recommended_action"] != "review":
+        raise JudgmentValidationError(
+            'flagged_no_pattern (matched_pattern=null with risk '
+            f'{data["risk_level"]}) requires recommended_action="review"')
 
     return JudgmentResult(**data)
 

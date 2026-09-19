@@ -52,7 +52,10 @@ money-laundering patterns, assess the risk level.
 Rules:
 1. Output ONLY valid JSON matching the provided schema.
 2. Every ID in the "evidence" array MUST exist in the input subgraph nodes or edges.
-3. If no pattern matches, output risk_level="no_match" and recommended_action="review".
+3. Matching state is expressed ONLY by matched_pattern (null = no KB match), never by
+   risk_level. If no pattern matches, judge the observed risk directly: "medium"/"high"
+   for suspicious structure with recommended_action="review"; "low" only when no
+   suspicious structure is observed.
 4. Do not hallucinate transaction IDs or addresses.
 5. Confidence is a float between 0.0 and 1.0.
 6. reasoning must reference specific structural features of the input subgraph.
@@ -64,7 +67,7 @@ Rules:
 {
   "type": "object",
   "properties": {
-    "risk_level": {"enum": ["high", "medium", "low", "no_match"]},
+    "risk_level": {"enum": ["high", "medium", "low"]},
     "matched_pattern": {"type": ["string", "null"]},
     "confidence": {"type": "number", "minimum": 0, "maximum": 1},
     "evidence": {"type": "array", "items": {"type": "string"}},
@@ -78,7 +81,11 @@ Rules:
 ## 5. 防幻觉四重机制
 
 ### 5.1 Prompt 约束
-System prompt 明确声明无匹配时必须输出 `no_match`。
+匹配状态与风险级别解耦（issue #72）：`no_match` 档已删除。`matched=null` 且
+`risk_level ∈ {medium, high}` 语义为 flagged_no_pattern（风险成立但无知识库匹配），
+硬校验强制 `recommended_action="review"`；`matched=null` 且 `low` = 观察到轻微接触
+但无可疑结构，可放行。confidence 全档统一为「对风险等级成立的确信度」，跨档可比。
+历史判定行中的旧 `no_match` 值保留原样不迁移（DB 无 CHECK 约束，前端 legacy 渲染）。
 
 ### 5.2 代码层引用校验
 ```python
@@ -149,5 +156,5 @@ async def judge(subgraph, candidates, address) -> JudgmentResult:
 - [ ] evidence 引用越界被拦截且重试后修正
 - [ ] 缓存命中时不调用 LLM
 - [ ] prompt 版本变更后缓存 key 不同
-- [ ] no_match 场景正确输出 review 动作
+- [ ] matched=null 且 risk∈{medium,high}（flagged_no_pattern）强制 review 动作
 - [ ] confidence 在 [0,1] 范围内
