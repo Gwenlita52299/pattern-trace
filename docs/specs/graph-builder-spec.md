@@ -77,6 +77,18 @@ class SubgraphResult:
 | early_stop | spending tx ∈ coinjoin_txids，或**运行时检测为 Crosschain**，或**启发式判定为 CoinJoin** | 生成 is_stopped_expansion=true 边，不向交易内部展开 |
 | tx4_new_dst | depth=3 目标地址此前未见 | 硬停止该分支 |
 | queue_empty | 三队列全部耗尽 | 正常结束 |
+| budget_exhausted（issue #80） | 单次分析建图请求/时长预算耗尽 | **提前收敛**：停止展开新 UTXO，`data_quality=degraded` + `source_errors` 带 `BUDGET_EXHAUSTED`，不伪装 complete |
+
+预算语义（issue #80，#79 入口预检的纵深防御层）：
+
+- 请求预算在 `LiveEsploraProvider._fetch` 缓存未命中处计数（覆盖 address_txs 分页 /
+  outspend / get_tx / resolve_spending_transaction 全部上游 HTTP），缓存命中不计数；
+  超限在发起 HTTP 前抛 `BudgetExhaustedError`
+- 时长预算 builder 侧独立计时（`GraphBuilder.build_time_budget_seconds`，从建图开始
+  计），覆盖重试退避等待与测试桩形态
+- 配置：`graph_request_budget`（默认 600，正常地址建图 <200 请求，给 3x 余量）/
+  `graph_build_time_budget_seconds`（默认 300s）
+- 预算事件写日志；后续挂接 #73 阶段 Trace 的 span metadata
 
 ## 4. early-stop 交易级集合
 
