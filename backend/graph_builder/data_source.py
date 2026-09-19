@@ -19,6 +19,7 @@ builder 的 provider 契约（issue #3 统一模型）：
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -213,7 +214,9 @@ class LiveEsploraProvider:
     }
 
     def __init__(self, base_url: str, timeout_seconds: float = 10.0,
-                 redis_client=None, max_pages: int | None = None):
+                 redis_client=None, max_pages: int | None = None,
+                 request_budget: int | None = None,
+                 time_budget_seconds: float | None = None):
         self.base_url = base_url.rstrip("/")
         self.fallback_base = self.FALLBACKS.get(self.base_url)
         self.timeout_seconds = timeout_seconds
@@ -225,6 +228,15 @@ class LiveEsploraProvider:
         # issue #25：截断记录 address -> 原因，供 builder 置 degraded
         # （provider 实例每次分析新建，无需跨实例清理）
         self.truncated_addresses: dict[str, str] = {}
+        # issue #80：单次分析总预算（0/None = 不限）。计数只发生在
+        # _fetch 缓存未命中后、发起 HTTP 前——缓存命中与重试退避
+        # 内的重复尝试不重复计入逻辑请求数
+        self.request_budget = request_budget
+        self.time_budget_seconds = time_budget_seconds
+        self.requests_used = 0
+        self.budget_exhausted = False
+        self.budget_exhausted_reason = ""
+        self._started_at = time.monotonic()
 
     def __call__(self, address: str) -> list:
         return self.address_txs(address)
@@ -321,11 +333,36 @@ class LiveEsploraProvider:
         return self._fetch(f"/address/{address}/stats")
 
     # ------------------------------------------------------------------
+    def _check_budget(self) -> None:
+        """issue #80：预算门。请求预算按逻辑请求数（缓存未命中）计；
+        时长预算从 provider 创建时刻计（覆盖重试退避等待）。超限置
+        exhausted 标记并抛错——builder 在 BFS 主循环轮询该标记提前收敛，
+        各分支捕获错误后 record_error 置 degraded。"""
+        if self.budget_exhausted:
+            raise BudgetExhaustedError(self.budget_exhausted_reason)
+        if self.request_budget is not None and self.request_budget > 0 \
+                and self.requests_used >= self.request_budget:
+            self.budget_exhausted = True
+            self.budget_exhausted_reason = (
+                f"request budget exhausted: {self.requests_used}"
+                f">={self.request_budget}")
+        elif self.time_budget_seconds is not None \
+                and self.time_budget_seconds > 0 \
+                and time.monotonic() - self._started_at >= self.time_budget_seconds:
+            self.budget_exhausted = True
+            self.budget_exhausted_reason = (
+                f"time budget exhausted: >= {self.time_budget_seconds}s")
+        if self.budget_exhausted:
+            print(f"[esplora] {self.budget_exhausted_reason}")
+            raise BudgetExhaustedError(self.budget_exhausted_reason)
+
     def _fetch(self, path: str) -> object:
+        self._check_budget()
         redis_key = f"esplora:{self.base_url}:{path}"
         cached = self._redis_get(redis_key)
         if cached is not None:
             return cached
+        self.requests_used += 1
         data = self._http_with_fault_tolerance(path)
         self._redis_set(redis_key, data)
         return data
@@ -430,12 +467,19 @@ class _SyncRateLimited(Exception):
         self.retry_after = retry_after
 
 
+class BudgetExhaustedError(Exception):
+    """issue #80：单次分析的建图请求/时长预算耗尽（builder 据此提前收敛）。"""
+    error_code = "BUDGET_EXHAUSTED"
+
+
 def build_provider(settings) -> tuple[object, list[str]]:
     """按 settings.graph_data_mode 返回 (provider, demo_seed_addresses)。"""
     if settings.graph_data_mode == "live":
         return LiveEsploraProvider(settings.esplora_api_url,
                                    redis_client=_sync_redis(),
-                                   max_pages=settings.esplora_max_pages), []
+                                   max_pages=settings.esplora_max_pages,
+                                   request_budget=settings.graph_request_budget,
+                                   time_budget_seconds=settings.graph_build_time_budget_seconds), []
     fixture = FixtureTxProvider.load()
     seeds = settings.demo_seeds_list or fixture.seed_addresses
     return fixture, seeds

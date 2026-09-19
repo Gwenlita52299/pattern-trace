@@ -146,6 +146,9 @@ def _esplora_error_code(exc: BaseException | None) -> str:
     """把上游图数据异常映射为错误码；无异常上下文返回通用 UPSTREAM_ERROR。"""
     if exc is None:
         return "UPSTREAM_ERROR"
+    from .data_source import BudgetExhaustedError
+    if isinstance(exc, BudgetExhaustedError):
+        return BudgetExhaustedError.error_code
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
         return "TIMEOUT"
     try:
@@ -200,6 +203,7 @@ class GraphBuilder:
         dust_threshold_btc: float = DUST_THRESHOLD_BTC,
         coinjoin_detector: CoinJoinDetector | None = None,
         crosschain_detector: CrosschainDetector | None = None,
+        build_time_budget_seconds: float | None = None,
     ) -> None:
         self.coinjoin_txids = coinjoin_txids or set()
         # 结构级启发式判定：任一消费交易不在 coinjoin_txids 集合里时，
@@ -213,6 +217,8 @@ class GraphBuilder:
         self.fanout_truncate_threshold = fanout_truncate_threshold
         self.max_rounds = max_rounds
         self.dust_threshold_btc = dust_threshold_btc
+        # issue #80：时长预算（builder 侧计时）；None = 由调用方传 settings 值
+        self.build_time_budget_seconds = build_time_budget_seconds
 
     # ------------------------------------------------------------------
     # 种子 UTXO 枚举（issue #3 地址模式）：一个地址拥有的 UTXO 只来自**输出侧**——
@@ -478,6 +484,22 @@ class GraphBuilder:
         return utxos, seed_nodes, seed_edges
 
     # ------------------------------------------------------------------
+    def _budget_stop_reason(self, tx_provider, start: float) -> str | None:
+        """issue #80：BFS 主循环每轮检查建图预算，返回终止原因（None = 继续）。
+
+        请求预算由 provider 在 _fetch 处维护（缓存命中不计）；时长预算
+        builder 侧独立计时（覆盖 provider 未带预算元数据的测试桩形态）。
+        """
+        exhausted = getattr(tx_provider, "budget_exhausted", None)
+        if exhausted is True:
+            return str(getattr(tx_provider, "budget_exhausted_reason", "")
+                       or "request budget exhausted")
+        budget_seconds = self.build_time_budget_seconds
+        if budget_seconds and budget_seconds > 0 \
+                and time.perf_counter() - start >= budget_seconds:
+            return f"build time budget exhausted: >= {budget_seconds}s"
+        return None
+
     def _run_bfs(
         self,
         seed_utxos: list[UTXO_ENTRY],
@@ -535,6 +557,14 @@ class GraphBuilder:
         round_num = 0
         while any(queues) and round_num < self.max_rounds:
             if len(nodes_by_id) >= self.max_total_nodes:
+                break
+            # issue #80：请求/时长预算耗尽即提前收敛——清空队列、置 degraded，
+            # 不再逐分支触发 provider 抛错（那只会多走一轮快照循环）
+            budget_reason = self._budget_stop_reason(tx_provider, start)
+            if budget_reason:
+                st.record_error(stage="esplora", address=None,
+                                error_code="BUDGET_EXHAUSTED",
+                                message=budget_reason)
                 break
             round_num += 1
             progressed = False

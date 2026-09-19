@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     # /address/:addr/stats 的 tx_count，超过即 422 拒绝（建图前拦截，
     # 避免高活跃地址进入 BFS 后产生数万次 outspend/get_tx 上游请求）
     address_tx_count_limit: int = 200
+    # issue #80：建图阶段请求/时长预算——预检（address_tx_count_limit）只读
+    # 种子地址历史交易数，BFS 实际请求数还受 hops/time_window/UTXO 结构影响。
+    # 所有上游 HTTP 都过 LiveEsploraProvider._fetch，在缓存未命中处计数，
+    # 超预算提前收敛（BFS 停止展开、置 degraded），缓存命中不计数。
+    graph_request_budget: int = 600
+    graph_build_time_budget_seconds: float = 300.0
     demo_seeds: str = ""                 # 匿名白名单地址 CSV；空则用 fixture 内 seed
     zombie_timeout_seconds: int = 120    # 进行中任务超时回收阈值（BE-40）
 

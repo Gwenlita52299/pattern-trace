@@ -232,7 +232,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
         # fixture 数据源自带夹具级标记集（demo txid 不在真实标签表里）
         coinjoin_txids = coinjoin_txids | provider.coinjoin_txids
 
-    builder = GraphBuilder(coinjoin_txids=coinjoin_txids)
+    builder = GraphBuilder(coinjoin_txids=coinjoin_txids,
+                           build_time_budget_seconds=settings.graph_build_time_budget_seconds)
     # out_of_range 终止需要时间窗基准（spec §3）：种子最近活动时刻；
     # live 模式下该取值会进 Redis 缓存，BFS 首次展开直接命中。
     # issue #12：live 模式（graph_data_mode == "live"）的网络请求/重试等待经
