@@ -37,8 +37,17 @@ SEED_DIR = ROOT / "ingest" / "seed"
 SETS = [  # (文件名, 期望标签)
     ("test_top20_C1.csv", "positive"),
     ("test_top20_C6.csv", "positive"),
-    ("test_bottom20_no_match.csv", "negative"),
+    ("test_bottom20_no_match.csv", "suspicious"),
 ]
+# issue #83 口径更新（2026-09，人工链上复核）：bottom20 无真负样本——
+# 按行为口径只保留 14 个确认可疑地址，分两组（rank 白名单，CSV 原始聚类
+# 标签不可靠）。用户链上分析：coinjoin_out_in 组 = 「coinjoin 出来两跳又
+# 进入新 coinjoin」；cluster4 组 = 混币完的正常交易/peelchain 倾向。
+# 期望：coinjoin_out_in 组 confidence 显著高于 cluster4 组（#83 校准目标）。
+SUSPICIOUS_GROUPS: dict[str, set[int]] = {
+    "coinjoin_out_in": {1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 16},
+    "cluster4_peelchain": {12, 17, 18},
+}
 RAW_PATH = ROOT / "output" / "eval" / "test_set_raw.json"
 REPORT_PATH = ROOT / "docs" / "baselines" / "test_set_eval.json"
 
@@ -46,15 +55,31 @@ POLL_INTERVAL_S = 3
 POLL_TIMEOUT_S = 240
 
 
+def suspicious_group_by_rank() -> dict[int, str]:
+    return {rk: g for g, ranks in SUSPICIOUS_GROUPS.items() for rk in ranks}
+
+
 def load_sets() -> list[dict]:
     rows = []
+    rank_group = suspicious_group_by_rank()
     for fname, expected in SETS:
         with open(SEED_DIR / fname, newline="", encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
                 addr = (r.get("address") or "").strip()
-                if addr:
-                    rows.append({"set": fname, "expected": expected,
-                                 "address": addr, "cluster": r.get("cluster", "")})
+                if not addr:
+                    continue
+                row = {"set": fname, "expected": expected,
+                       "address": addr, "cluster": r.get("cluster", "")}
+                if expected == "suspicious":
+                    try:
+                        rk = int(r.get("rank") or 0)
+                    except ValueError:
+                        continue
+                    group = rank_group.get(rk)
+                    if group is None:  # 非行为口径确认的地址不进入校验集
+                        continue
+                    row["suspicious_group"] = group
+                rows.append(row)
     return rows
 
 
@@ -162,13 +187,28 @@ def _retrieve_recall(canon: dict, k: int) -> tuple[bool, str | None]:
 
 
 def phase_report(raw: list[dict]) -> int:
+    # 按地址分类（不依赖 raw 里的历史 expected 标签——旧 raw 为
+    # positive/negative，新口径为 positive/suspicious）
+    meta_by_addr = {r["address"]: r for r in load_sets()}
     completed = [r for r in raw if r["status"] == "completed"]
-    positives = [r for r in completed if r["expected"] == "positive"]
-    negatives = [r for r in completed if r["expected"] == "negative"]
+    for r in completed:
+        m = meta_by_addr.get(r["address"])
+        r["_expected"] = m["expected"] if m else r.get("expected")
+        if m and m.get("suspicious_group"):
+            r["suspicious_group"] = m["suspicious_group"]
+    positives = [r for r in completed if r["_expected"] == "positive"]
+    # issue #83 口径：bottom20 无真负样本——14 个行为口径确认可疑地址
+    # （coinjoin_out_in / cluster4_peelchain 两组）计入可疑检出率，
+    # 不再计算 FPR
+    suspicious = [r for r in completed if r["_expected"] == "suspicious"]
+    suspicious_by_group: dict[str, list[dict]] = {}
+    for r in suspicious:
+        suspicious_by_group.setdefault(
+            r.get("suspicious_group") or "unknown", []).append(r)
 
-    if not positives or not negatives:
+    if not positives or not suspicious:
         print(f"样本不足：completed positive={len(positives)} "
-              f"negative={len(negatives)}——先完成 submit 阶段", file=sys.stderr)
+              f"suspicious={len(suspicious)}——先完成 submit 阶段", file=sys.stderr)
         return 2
 
     # ---- judge 层指标（issue #72 口径）----
@@ -184,8 +224,24 @@ def phase_report(raw: list[dict]) -> int:
 
     tpr = sum(hit(r) for r in positives) / len(positives)
     tpr_strong = sum(strong_hit(r) for r in positives) / len(positives)
-    fpr = sum(hit(r) for r in negatives) / len(negatives)
-    fpr_strong = sum(strong_hit(r) for r in negatives) / len(negatives)
+    # 可疑样本检出率（行为口径确认可疑 → 期望被上报 medium/high）
+    sus_rate = sum(strong_hit(r) for r in suspicious) / len(suspicious)
+
+    # ---- 分组 confidence 统计（#83 校准目标：coinjoin 组应显著高于
+    # cluster4 组——当前 v10 下两者重叠，是 confidence 校准的验收依据）----
+    import statistics
+
+    group_stats: dict[str, dict] = {}
+    for g, rows in sorted(suspicious_by_group.items()):
+        confs = [r["confidence"] for r in rows if r.get("confidence") is not None]
+        group_stats[g] = {
+            "n": len(rows),
+            "risk": {k: sum(1 for r in rows if r.get("risk_level") == k)
+                     for k in ("high", "medium", "low")},
+            "conf_mean": round(statistics.mean(confs), 3) if confs else None,
+            "conf_median": round(statistics.median(confs), 3) if confs else None,
+            "conf_values": sorted(confs),
+        }
 
     # ---- 检索层 recall@k（生产链路同款 Retriever，直调）----
     recall: dict[int, float] = {}
@@ -213,43 +269,38 @@ def phase_report(raw: list[dict]) -> int:
         print(f"retrieval recall 计算失败（judge 层指标仍有效）: {exc}",
               file=sys.stderr)
 
-    # ---- confidence 阈值扫描（bottom20 校准，#72 风险上报口径）----
+    # ---- confidence 阈值扫描（positive TPR vs 可疑组检出，无负样本）----
     sweep = []
     for cutoff in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9):
         pred_pos = [strong_hit(r) and (r["confidence"] or 0) >= cutoff
                     for r in positives]
-        pred_neg_hit = [strong_hit(r) and (r["confidence"] or 0) >= cutoff
-                        for r in negatives]
+        pred_sus = [strong_hit(r) and (r["confidence"] or 0) >= cutoff
+                    for r in suspicious]
         sweep.append({
             "cutoff": cutoff,
-            "tpr": round(sum(pred_pos) / len(pred_pos), 4),
-            "fpr": round(sum(pred_neg_hit) / len(pred_neg_hit), 4),
+            "positive_tpr": round(sum(pred_pos) / len(pred_pos), 4),
+            "suspicious_rate": round(sum(pred_sus) / len(pred_sus), 4),
         })
 
     report = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "counts": {"positive": len(positives), "negative": len(negatives),
+        "counts": {"positive": len(positives), "suspicious": len(suspicious),
                    "submitted": len(raw), "failed": len(raw) - len(completed)},
         "judge": {
-            # issue #72 口径：tpr_strong = positive 风险被上报率（medium/high）；
-            # fpr_strong = negative 风险被上报率——注意 bottom20 的标签口径
-            # 是「聚类不匹配 ≠ 行为无风险」（#71 人工复核：bc1psrwl5fkh
-            # peel-and-return+coinjoin 实为可疑），fpr_strong 虚高是标签问题
+            # issue #72/#83 口径：positive = KB 外同簇变体（期望风险上报）；
+            # suspicious = 行为口径确认可疑（无真负样本，不计算 FPR）
             "positive_hit_rate_any": round(tpr, 4),
             "positive_hit_rate_strong": round(tpr_strong, 4),
             "kb_match_rate": round(tpr, 4),
-            "negative_fpr_any": round(fpr, 4),
-            "negative_fpr_strong": round(fpr_strong, 4),
-            "fpr_caveat": ("bottom20 labels are cluster-based, not behavior-"
-                           "based; manual review of 1/20 confirmed suspicious "
-                           "behavior (peel-and-return + coinjoin) — "
-                           "see issue #71 comment 2"),
+            "suspicious_detection_rate": round(sus_rate, 4),
         },
+        "suspicious_groups": group_stats,
         "retrieval_recall_at_k": recall,
         "confidence_threshold_sweep": sweep,
         "per_address": [{k: r.get(k) for k in
-                         ("set", "expected", "address", "status", "risk_level",
-                          "confidence", "matched_pattern_name", "latency_ms")}
+                         ("set", "expected", "suspicious_group", "address",
+                          "status", "risk_level", "confidence",
+                          "matched_pattern_name", "latency_ms")}
                         for r in raw],
     }
     REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2))
@@ -257,10 +308,18 @@ def phase_report(raw: list[dict]) -> int:
                      ensure_ascii=False, indent=2))
     print(f"report -> {REPORT_PATH}")
 
-    # 评测门槛（#72 口径）：positive 风险上报率 ≥0.8。fpr_strong 受 bottom20
-    # 行为口径标签复核影响（#71 衍生待办），暂不计入硬门禁
-    ok = tpr_strong >= 0.8
-    print("✅ 评测达标" if ok else "❌ 评测未达标（positive 风险上报率 <0.8）")
+    # 评测门槛（#83 口径，无负样本）：positive 风险上报率 ≥0.8 且
+    # 行为口径可疑地址检出率 ≥0.9；组间 confidence 区分度是 #83 的
+    # 校准目标（观察项，暂不设硬门禁）
+    ok = tpr_strong >= 0.8 and sus_rate >= 0.9
+    print("✅ 评测达标" if ok else
+          "❌ 评测未达标（positive TPR <0.8 或 suspicious 检出率 <0.9）")
+    gap = (group_stats.get("coinjoin_out_in", {}).get("conf_mean"),
+           group_stats.get("cluster4_peelchain", {}).get("conf_mean"))
+    if None not in gap:
+        print(f"分组 conf 均值：coinjoin_out_in={gap[0]} vs "
+              f"cluster4_peelchain={gap[1]}（差值 {round(gap[0] - gap[1], 3)}）"
+              "——#83 校准目标：前者应显著高于后者")
     return 0 if ok else 1
 
 
