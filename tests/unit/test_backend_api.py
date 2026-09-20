@@ -578,38 +578,85 @@ class TestRetrievalExplanation:
         assert snap["candidates"] == []
 
 
+def _seed_pattern(pid: str, *, name: str = "detail_test",
+                  provenance: str = "confirmed", grade: str = "A") -> str:
+    """插入测试模式行——CI 的 DB 无预置 KB，测试不得依赖既有数据。"""
+    from backend.models.knowledge import Pattern
+
+    with Session(get_db_engine()) as session:
+        session.add(Pattern(
+            id=pid, name=name, source="lazarus_confirmed",
+            provenance=provenance, evidence_grade=grade,
+            seed_address="bc1qdetail",
+            content_hash=(f"h{pid}" * 64)[:64],
+            description="detail test pattern",
+            canonical_subgraph={
+                "nodes": [
+                    {"id": "addr:bc1qdetail", "kind": "address",
+                     "first_layer": 0},
+                    {"id": "tx:aaa", "kind": "transaction",
+                     "first_layer": 0},
+                    {"id": "addr:bc1qdown", "kind": "address",
+                     "first_layer": 1},
+                ],
+                "edges": [
+                    {"id": "e1", "source": "addr:bc1qdetail",
+                     "target": "tx:aaa"},
+                    {"id": "e2", "source": "tx:aaa",
+                     "target": "addr:bc1qdown"},
+                ],
+            }))
+        session.commit()
+    return pid
+
+
+def _drop_pattern(pid: str) -> None:
+    from backend.models.knowledge import Pattern
+
+    with Session(get_db_engine()) as session:
+        session.execute(delete(Pattern).where(Pattern.id == pid))
+        session.commit()
+
+
 class TestPatternDetail:
     """issue #84：单条模式详情端点（结构预览/对比的数据源）。"""
 
     @requires_db
     def test_detail_returns_subgraph_and_metadata(self, api_client):
-        r = api_client.get("/api/v1/patterns",
-                           params={"page_size": 1, "evidence_grade": "A"})
-        pid = r.json()["items"][0]["id"]
-
-        d = api_client.get(f"/api/v1/patterns/{pid}")
-        assert d.status_code == 200
-        body = d.json()
-        for key in ("id", "name", "source", "provenance", "evidence_grade",
-                    "seed_address", "description", "node_count", "edge_count",
-                    "graph_truncated", "displayed_node_count",
-                    "canonical_subgraph"):
-            assert key in body, key
-        sub = body["canonical_subgraph"]
-        assert isinstance(sub["nodes"], list) and isinstance(sub["edges"], list)
-        assert body["node_count"] >= len(sub["nodes"])
-        # 边闭合：截断后不得出现悬空端点（前端渲染契约）
-        ids = {n["id"] for n in sub["nodes"]}
-        assert all(e["source"] in ids and e["target"] in ids
-                   for e in sub["edges"])
+        pid = _seed_pattern("p-detail-test", name="detail_test")
+        try:
+            d = api_client.get(f"/api/v1/patterns/{pid}")
+            assert d.status_code == 200
+            body = d.json()
+            for key in ("id", "name", "source", "provenance", "evidence_grade",
+                        "seed_address", "description", "node_count",
+                        "edge_count", "graph_truncated",
+                        "displayed_node_count", "canonical_subgraph"):
+                assert key in body, key
+            sub = body["canonical_subgraph"]
+            assert isinstance(sub["nodes"], list)
+            assert isinstance(sub["edges"], list)
+            assert body["node_count"] >= len(sub["nodes"])
+            assert body["name"] == "detail_test"
+            assert body["description"] == "detail test pattern"
+            # 边闭合：截断后不得出现悬空端点（前端渲染契约）
+            ids = {n["id"] for n in sub["nodes"]}
+            assert all(e["source"] in ids and e["target"] in ids
+                       for e in sub["edges"])
+        finally:
+            _drop_pattern(pid)
 
     @requires_db
     def test_detail_public_read_and_404(self, api_client):
         # 匿名可读（与 patterns 列表同权限）
-        r = api_client.get("/api/v1/patterns",
-                           params={"page_size": 1})
-        pid = r.json()["items"][0]["id"]
-        assert api_client.get(f"/api/v1/patterns/{pid}").status_code == 200
+        pid = _seed_pattern("p-detail-public", name="detail_public",
+                            provenance="synthetic", grade="S")
+        try:
+            body = api_client.get(f"/api/v1/patterns/{pid}").json()
+            assert body["provenance"] == "synthetic"
+            assert body["evidence_grade"] == "S"
+        finally:
+            _drop_pattern(pid)
         assert api_client.get(
             "/api/v1/patterns/00000000-0000-0000-0000-000000000000"
         ).status_code == 404
