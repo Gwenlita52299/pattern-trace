@@ -132,6 +132,43 @@ const AddressNode = memo(function AddressNode({
 }, nodeDataEqual);
 
 /**
+ * 证据边取色（调性规范：琥珀 = 证据，唯一强调色；色 + 图标双编码）。
+ *
+ * 优先级：物证高亮 > 混币(remixer) > 跨链(crosschain) > 其他停止 > 默认。
+ * 跨链（如 thorchain）是最终可疑链路的高危证据点——必须与普通
+ * out_of_range 停止边（灰虚线）区分（issue: 前端未标记 thorchain 跨链 tx）。
+ */
+export function edgeStroke(
+  e: { is_remixer?: boolean; is_crosschain?: boolean;
+       is_stopped_expansion?: boolean },
+  highlighted: boolean,
+): string {
+  if (highlighted) return "#f0b429";
+  if (e.is_remixer) return "#f0b429";
+  if (e.is_crosschain) return "#f0b429";
+  if (e.is_stopped_expansion) return "#3a4250";
+  return "#2a3340";
+}
+
+/** 虚线仅用于「非证据的停止扩展」边；证据边（混币/跨链）保持实线。 */
+export function edgeDashed(e: {
+  is_remixer?: boolean; is_crosschain?: boolean;
+  is_stopped_expansion?: boolean;
+}): boolean {
+  return !!e.is_stopped_expansion && !e.is_remixer && !e.is_crosschain;
+}
+
+/** 终止交易节点语气：mixer / crosschain 均为证据点（琥珀），其余普通停止。 */
+export function terminalTone(
+  isRemixer: boolean | undefined,
+  isCrosschain: boolean | undefined,
+): "mixer" | "crosschain" | "stopped" {
+  if (isRemixer) return "mixer";
+  if (isCrosschain) return "crosschain";
+  return "stopped";
+}
+
+/**
  * 终止交易节点（issue #9）：CoinJoin / Crosschain / Out of Range 等停止扩展的交易
  * 在地址流式视图中渲染为独立 terminal 节点，展示停止原因与协议。
  */
@@ -139,28 +176,41 @@ const TerminalNode = memo(function TerminalNode({ data }: { data: NodeData }) {
   const raw = data.raw;
   const hlClass = useHighlightMark(raw.id);
   const stopReason = (raw.stop_reason ?? "out_of_range") as string;
-  const protocolLabel = raw.is_crosschain && raw.protocol ? ` · ${raw.protocol}` : "";
-  const isMixer = raw.is_remixer;
+  const protocol = raw.is_crosschain ? (raw.protocol ?? "crosschain") : null;
+  const tone = terminalTone(raw.is_remixer, raw.is_crosschain);
+  const isEvidence = tone !== "stopped";
+  const icon = tone === "mixer" ? "♻" : tone === "crosschain" ? "⛓" : null;
+  const ariaKind = tone === "mixer" ? "mixer coinjoin"
+    : tone === "crosschain" ? `crosschain ${protocol}` : "stop";
   return (
     <div
       role="button"
-      aria-label={`terminal transaction ${raw.txid ?? raw.id}`}
+      aria-label={`terminal transaction ${raw.txid ?? raw.id} (${ariaKind})`}
       className={`relative rounded-lg border px-3 py-2 text-xs cursor-pointer transition-shadow ${
-        isMixer
-          ? "border-2 border-pt-amber bg-[#171a14]" // 混币终止交易：琥珀证据框
-          : raw.is_crosschain
-            ? "border-2 border-pt-medium bg-[#131722]"
-            : "border-2 border-dashed border-[#3a4250] bg-pt-panel-2"
+        isEvidence
+          ? "border-2 border-pt-amber bg-[#171a14]" // 证据点（混币/跨链）：琥珀证据框
+          : "border-2 border-dashed border-[#3a4250] bg-pt-panel-2"
       }${hlClass}`}
       style={{ minWidth: 150 }}
     >
       <div className="flex items-center gap-1 font-mono text-[10px] text-pt-muted">
-        {isMixer && <span aria-label="mixer" className="text-pt-amber">♻</span>}
-        terminal tx:{stopReason}
+        {icon && (
+          <span aria-hidden className="text-pt-amber">{icon}</span>
+        )}
+        {tone === "crosschain" ? (
+          <span
+            className="rounded border border-pt-amber/50 bg-pt-amber/10 px-1 py-0.5 font-semibold text-pt-amber-hi"
+            data-testid="crosschain-badge"
+          >
+            跨链 {protocol}
+          </span>
+        ) : (
+          <span>terminal tx:{stopReason}</span>
+        )}
       </div>
       <div className="break-all font-mono text-[10px] text-pt-muted">
         {(raw.txid ?? raw.id).slice(0, 18)}
-        {protocolLabel}
+        {tone === "mixer" && <span className="text-pt-amber"> · coinjoin</span>}
       </div>
       {/* 终止交易是流向终点，只需 target 锚点 */}
       <Handle type="target" position={Position.Left} isConnectable={false}
@@ -322,9 +372,10 @@ function buildEdges(
       if (e.is_stopped_expansion) flags.push("stopped"); // FE-14
       const amountLabel = flowAmountLabel(e);
       const label = [amountLabel, flags.join("·")].filter(Boolean).join(" · ");
-      // 高亮边（FE-26 / issue #39）：琥珀证据色 + 加粗；虚线（stopped）保留
+      // 高亮边（FE-26 / issue #39）：琥珀证据色 + 加粗；
+      // 混币/跨链证据边琥珀实线，普通停止边灰虚线（edgeDashed）
       const hl = highlightIds.has(e.id);
-      const stroke = hl ? "#f0b429" : e.is_stopped_expansion ? "#3a4250" : e.is_remixer ? "#f0b429" : "#2a3340";
+      const stroke = edgeStroke(e, hl);
       return {
         id: e.id,
         source: e.source,
@@ -334,7 +385,7 @@ function buildEdges(
         labelStyle: { fontSize: 9, fill: hl ? "#ffd166" : "#8b93a1" },
         labelBgStyle: { fill: "#141920" },
         style: {
-          ...(e.is_stopped_expansion ? { strokeDasharray: "6 4" } : {}),
+          ...(edgeDashed(e) ? { strokeDasharray: "6 4" } : {}),
           stroke,
           ...(hl ? { strokeWidth: 2 } : {}),
         },
@@ -483,7 +534,7 @@ export default function GraphCanvas({
 
   return (
     <HighlightContext.Provider value={displayHighlightIds}>
-      <div style={{ width: "100%", height: "100%" }} data-testid="graph-canvas">
+      <div className="relative" style={{ width: "100%", height: "100%" }} data-testid="graph-canvas">
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
@@ -502,7 +553,40 @@ export default function GraphCanvas({
           <Background gap={24} color="#1a2029" />
           <Controls showInteractive={false} />
         </ReactFlow>
+        {/* 图例（仅展示当前子图实际存在的元素）：跨链/混币为琥珀证据点，
+            普通停止扩展为灰虚线——避免 thorchain 跨链 tx 被淹没在停止边里 */}
+        <GraphLegend subgraph={subgraph} />
       </div>
     </HighlightContext.Provider>
+  );
+}
+
+function GraphLegend({
+  subgraph,
+}: {
+  subgraph: { edges: GraphEdge[] };
+}) {
+  const hasCross = subgraph.edges.some((e) => e.is_crosschain);
+  const hasMixer = subgraph.edges.some((e) => e.is_remixer);
+  const hasStop = subgraph.edges.some(
+    (e) => e.is_stopped_expansion && !e.is_remixer && !e.is_crosschain);
+  if (!hasCross && !hasMixer && !hasStop) return null;
+  return (
+    <div
+      className="pointer-events-none absolute bottom-3 left-3 z-10 flex flex-wrap gap-x-3 gap-y-1 rounded-md border border-pt-line bg-pt-panel/90 px-2.5 py-1.5 font-mono text-[10px] text-pt-muted"
+      data-testid="graph-legend"
+    >
+      {hasCross && (
+        <span data-testid="legend-crosschain">
+          <span aria-hidden className="text-pt-amber">⛓</span> 跨链证据
+        </span>
+      )}
+      {hasMixer && (
+        <span data-testid="legend-mixer">
+          <span aria-hidden className="text-pt-amber">♻</span> 混币 CoinJoin
+        </span>
+      )}
+      {hasStop && <span data-testid="legend-stopped">┅ 停止扩展</span>}
+    </div>
   );
 }
