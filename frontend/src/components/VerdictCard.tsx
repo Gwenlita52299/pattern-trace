@@ -5,7 +5,7 @@
 import { useAnalysisStore } from "@/store/analysis";
 import RetrievalExplanationPanel from "@/components/RetrievalExplanation";
 import { evidenceTag, shortId } from "@/lib/evidence-display";
-import { tokenizeReasoning } from "@/lib/reasoning-highlight";
+import { splitConclusion, tokenizeReasoning } from "@/lib/reasoning-highlight";
 
 // 调性规范（docs/design-tone.md）：四档微色彩编码——小圆点 + 文字标签，
 // 大面板永远冷静；琥珀只用于证据/高危。色+图标双编码（a11y）保留。
@@ -57,6 +57,29 @@ function fmtTs(ts?: string | null): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
     `${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`;
+}
+
+/** 描述文本的 token 渲染：地址=证据琥珀、交易=medium 蓝，均加粗缩短。 */
+function ReasoningTokens({ text }: { text: string }) {
+  return (
+    <>
+      {tokenizeReasoning(text).map((t, i) =>
+        t.type === "text" ? (
+          <span key={i}>{t.display}</span>
+        ) : (
+          <span
+            key={i}
+            title={t.value}
+            className={`break-all font-mono font-semibold ${
+              t.type === "addr" ? "text-pt-amber-hi" : "text-pt-medium"
+            }`}
+          >
+            {t.display}
+          </span>
+        ),
+      )}
+    </>
+  );
 }
 
 export interface VerdictCardProps {
@@ -178,25 +201,27 @@ export default function VerdictCard({ onRetry, forceLoading }: VerdictCardProps)
         </div>
       )}
 
-      {judgment?.reasoning && (
-        <p className="mt-3 min-w-0 whitespace-pre-wrap break-words text-xs leading-relaxed text-pt-muted">
-          {tokenizeReasoning(judgment.reasoning).map((t, i) =>
-            t.type === "text" ? (
-              <span key={i}>{t.display}</span>
-            ) : (
-              <span
-                key={i}
-                title={t.value}
-                className={`break-all font-mono font-semibold ${
-                  t.type === "addr" ? "text-pt-amber-hi" : "text-pt-medium"
-                }`}
+      {judgment?.reasoning && (() => {
+        const { body, conclusion } = splitConclusion(judgment.reasoning);
+        return (
+          <>
+            {body && (
+              <p className="mt-3 min-w-0 whitespace-pre-wrap break-words text-xs leading-relaxed text-pt-muted">
+                <ReasoningTokens text={body} />
+              </p>
+            )}
+            {conclusion && (
+              // 末尾结论句高亮（用户要求）：琥珀细竖线 + 极浅底 + 亮色正文
+              <p
+                data-testid="reasoning-conclusion"
+                className="mt-2 min-w-0 whitespace-pre-wrap break-words border-l-2 border-pt-amber/60 bg-pt-amber/[0.04] py-1.5 pl-2.5 text-xs font-medium leading-relaxed text-pt-ink"
               >
-                {t.display}
-              </span>
-            ),
-          )}
-        </p>
-      )}
+                <ReasoningTokens text={conclusion} />
+              </p>
+            )}
+          </>
+        );
+      })()}
 
       {(judgment?.evidence?.length ?? 0) > 0 && (
         <div className="mt-4 min-w-0">

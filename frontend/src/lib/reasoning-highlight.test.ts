@@ -1,7 +1,7 @@
 // 描述文本地址/tx 识别单测（Verdict：不出框 + 加粗高亮的前提）。
 import { describe, expect, it } from "vitest";
 
-import { tokenizeReasoning } from "@/lib/reasoning-highlight";
+import { splitConclusion, tokenizeReasoning } from "@/lib/reasoning-highlight";
 
 const ADDR = "bc1pewmn7vcp5rjmvnuwd5aqy9s9j9yf6z9yqncjv38l7n4e6guq4v6qn2gghz";
 const TXID = "02b4aa6b3c9ed631afe44601ac638ae831cfc01d08a16a1efa2f650a1e96ac6b";
@@ -39,5 +39,30 @@ describe("tokenizeReasoning", () => {
     const tokens = tokenizeReasoning(text);
     expect(tokens).toHaveLength(1);
     expect(tokens[0]).toMatchObject({ type: "text", display: text });
+  });
+});
+
+describe("splitConclusion（末尾结论句拆分高亮）", () => {
+  it("末尾未以句号收尾的片段即结论（截图实际形态）", () => {
+    const text = "The subgraph shows peel-and-return. The seed sends funds. "
+      + "The presence of a cross-chain swap hop is a strong indicator of suspicious activity.";
+    const r = splitConclusion(text);
+    expect(r.conclusion).toBe(
+      "The presence of a cross-chain swap hop is a strong indicator of suspicious activity.");
+    expect(r.body).toBe("The subgraph shows peel-and-return. The seed sends funds.");
+  });
+
+  it("以句号结尾 → 最后一句为结论；小数不误切", () => {
+    const r = splitConclusion("Structural similarity is moderate (struct=0.93). Risk is medium.");
+    expect(r.body).toBe("Structural similarity is moderate (struct=0.93).");
+    expect(r.conclusion).toBe("Risk is medium.");
+  });
+
+  it("单句文本整体视作结论；无标点时 body 原样", () => {
+    const single = splitConclusion("Suspicious cross-chain hop detected.");
+    expect(single.body).toBe("");
+    expect(single.conclusion).toBe("Suspicious cross-chain hop detected.");
+    const noPunct = splitConclusion("no terminator here");
+    expect(noPunct).toEqual({ body: "no terminator here", conclusion: "" });
   });
 });
