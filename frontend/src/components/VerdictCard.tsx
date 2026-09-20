@@ -4,6 +4,7 @@
 // evidence 列表每条可点击 → 高亮画布对应节点/边。
 import { useAnalysisStore } from "@/store/analysis";
 import RetrievalExplanationPanel from "@/components/RetrievalExplanation";
+import { evidenceTag, shortId } from "@/lib/evidence-display";
 
 // 调性规范（docs/design-tone.md）：四档微色彩编码——小圆点 + 文字标签，
 // 大面板永远冷静；琥珀只用于证据/高危。色+图标双编码（a11y）保留。
@@ -110,7 +111,7 @@ export default function VerdictCard({ onRetry, forceLoading }: VerdictCardProps)
       data-testid="verdict-card"
       role="status"
       aria-label={`风险等级：${style.label}`}
-      className="rounded-xl border border-pt-line bg-pt-panel p-5"
+      className="min-w-0 rounded-xl border border-pt-line bg-pt-panel p-5"
     >
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-2.5 text-lg font-bold tracking-widest">
@@ -183,22 +184,45 @@ export default function VerdictCard({ onRetry, forceLoading }: VerdictCardProps)
       )}
 
       {(judgment?.evidence?.length ?? 0) > 0 && (
-        <div className="mt-4">
+        <div className="mt-4 min-w-0">
           <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-pt-muted">
             物证 Evidence（点击在图中高亮）
           </p>
-          <ul className="space-y-1">
-            {judgment!.evidence!.map((eid) => (
-              <li key={eid}>
-                <button
-                  onClick={() => setHighlight([eid])}
-                  aria-label={`高亮 ${eid.startsWith("addr:") ? "地址" : eid.startsWith("tx:") ? "交易" : "边"} ${eid}`}
-                  className="w-full truncate rounded border border-pt-line bg-pt-panel-2 px-2 py-1 text-left font-mono text-[10px] text-pt-amber-hi hover:border-pt-amber"
-                >
-                  {eid}
-                </button>
-              </li>
-            ))}
+          <ul className="min-w-0 space-y-1">
+            {judgment!.evidence!.map((eid, i) => {
+              // 重点层级：LLM 按 prompt 要求只列最强证据且顺序即强弱，
+              // 首条标为主证据；关联跨链/混币边的地址加类型图标
+              const tag = evidenceTag(eid, judgment?.subgraph?.edges);
+              const primary = i === 0;
+              return (
+                <li key={eid} className="min-w-0">
+                  <button
+                    onClick={() => setHighlight([eid])}
+                    title={`${eid}（点击在图中高亮）`}
+                    aria-label={`高亮 ${eid.startsWith("addr:") ? "地址" : eid.startsWith("tx:") ? "交易" : "边"} ${eid}`}
+                    className={`flex w-full min-w-0 items-center gap-1.5 rounded border px-2 py-1 text-left font-mono text-[10px] transition-colors hover:border-pt-amber ${
+                      primary
+                        ? "border-pt-amber/50 bg-pt-amber/5 text-pt-amber-hi"
+                        : "border-pt-line bg-pt-panel-2 text-pt-muted"
+                    }`}
+                  >
+                    <span
+                      className={`shrink-0 text-[9px] ${
+                        primary ? "font-semibold text-pt-amber-hi" : "text-pt-faint"
+                      }`}
+                    >
+                      {primary ? "主证据" : `#${i + 1}`}
+                    </span>
+                    {tag && (
+                      <span aria-hidden className="shrink-0 text-pt-amber">
+                        {tag === "crosschain" ? "⛓" : "♻"}
+                      </span>
+                    )}
+                    <span className="truncate">{shortId(eid)}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           <button
             onClick={() => setHighlight([])}
