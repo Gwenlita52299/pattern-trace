@@ -20,6 +20,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { path: '/api/v1/cases/{case_id}/reports', methods: ["POST"] },
   { path: '/api/v1/demo/addresses', methods: ["GET"] },
   { path: '/api/v1/judgments/{judgment_id}', methods: ["GET"] },
+  { path: '/api/v1/judgments/{judgment_id}/retrieval-explanation', methods: ["GET"] },
   { path: '/api/v1/patterns', methods: ["GET"] },
   { path: '/api/v1/reports/{report_id}', methods: ["GET"] },
   { path: '/api/v1/reports/{report_id}/download', methods: ["GET"] },

@@ -193,3 +193,42 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// issue #77：检索解释快照（匹配依据）——后端落库时自包含，历史判定不受
+// 后续模式编辑/检索配置变化影响
+// ---------------------------------------------------------------------------
+export interface ExplanationCandidate {
+  rank: number;
+  pattern_id: string;
+  name: string;
+  provenance: string;       // confirmed | synthetic | ...
+  evidence_grade: string;   // A | B | S
+  source: string;
+  similarity_score: number; // final（融合后）
+  structural_similarity: number;
+  semantic_similarity: number;
+  wl_kernel_score: number;
+  fp_score: number;
+  ov_score: number;
+  difference_note: string | null;
+}
+
+export interface RetrievalExplanation {
+  judgment_id: string;
+  status: string;
+  algorithm_version: string | null;
+  params: Record<string, string | number> | null;
+  recall: { mode: string; count: number; empty_reason: string | null } | null;
+  candidates: ExplanationCandidate[];
+  dropped_by_top_k: number;
+  empty_reason: string | null; // analysis_in_progress | retrieval_not_recorded | ...
+}
+
+export async function getRetrievalExplanation(
+  judgmentId: string,
+): Promise<RetrievalExplanation> {
+  return api<RetrievalExplanation>(
+    `/api/v1/judgments/${encodeURIComponent(judgmentId)}/retrieval-explanation`,
+  );
+}

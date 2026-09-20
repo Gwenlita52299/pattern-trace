@@ -150,6 +150,36 @@ def run_pipeline(client, auth: dict | None) -> int:
               f"matched={matched} top1={cand_names[:1]}")
         _assert_stage_sequence(events, jid)
 
+        # ---- 检索解释快照端点（issue #77）----
+        exp = client.get(
+            f"/api/v1/judgments/{jid}/retrieval-explanation",
+            headers=auth or {})
+        check("retrieval-explanation 200", exp.status_code == 200,
+              str(exp.status_code))
+        if exp.status_code == 200:
+            snap = exp.json()
+            check("explanation params 可复现",
+                  snap.get("algorithm_version") == "retr-v1"
+                  and (snap.get("params") or {}).get("top_k", 0) >= 1,
+                  str(snap.get("params")))
+            check("explanation recall 元信息",
+                  (snap.get("recall") or {}).get("mode") in
+                  ("graphormer_online", "graphormer_ego", "hybrid"),
+                  str(snap.get("recall")))
+            cands_e = snap.get("candidates") or []
+            check("explanation 候选含 rank+全分数",
+                  bool(cands_e) and all(
+                      c.get("rank") == i
+                      and "wl_kernel_score" in c
+                      and "similarity_score" in c
+                      and "provenance" in c
+                      for i, c in enumerate(cands_e, start=1)),
+                  f"n={len(cands_e)}")
+            check("explanation 候选与 judge 输入同源",
+                  matched in [c.get("name") for c in cands_e]
+                  if matched else True,
+                  f"matched={matched}")
+
         # ---- 可视化数据链路：前端消费的同一 subgraph 端点（BE-33）----
         r = client.get(f"/api/v1/addresses/{demo_addr}/subgraph",
                        headers=auth or {})

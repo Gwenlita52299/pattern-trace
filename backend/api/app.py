@@ -725,6 +725,53 @@ def create_app() -> FastAPI:
                      "poll_url": f"/api/v1/judgments/{jid}"},
         )
 
+    @app.get("/api/v1/judgments/{judgment_id}/retrieval-explanation")
+    def get_retrieval_explanation(judgment_id: str):
+        """issue #77：检索解释快照（匹配依据）——权限同 GET judgments（匿名只读）。
+
+        从 judgment_events 的 stage:retrieval_done 行读取**落库时**的自包含
+        快照，不实时查 patterns/检索配置——历史 Judgment 的解释不受后续
+        模式编辑或配置变化影响（验收要求）。
+
+        pending 行（尚未完成检索）返回 409 语义的空态：status=processing +
+        stages 进度，前端展示"分析进行中"而非错误；failed 行无快照时同样
+        明确返回 empty_reason。
+        """
+        from ..models.base import Judgment, JudgmentEvent
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Judgment, judgment_id)
+            if row is None:
+                raise ProblemError(404, "Judgment not found", "NOT_FOUND")
+            events = session.execute(
+                select(JudgmentEvent)
+                .where(JudgmentEvent.judgment_id == judgment_id,
+                       JudgmentEvent.to_status == "stage:retrieval_done")
+                .order_by(JudgmentEvent.id.desc())
+                .limit(1)
+            ).scalars().all()
+        snapshot = (events[0].detail if events else None) or None
+        if snapshot is None:
+            # 快照未生成：明确区分「进行中」与「无检索记录」
+            empty_reason = ("analysis_in_progress"
+                            if row.status in ("queued", "processing")
+                            else "retrieval_not_recorded")
+            return {
+                "judgment_id": judgment_id,
+                "status": row.status,
+                "algorithm_version": None,
+                "params": None,
+                "recall": None,
+                "candidates": [],
+                "dropped_by_top_k": 0,
+                "empty_reason": empty_reason,
+            }
+        payload = dict(snapshot)
+        payload["judgment_id"] = judgment_id
+        payload["status"] = row.status
+        payload.setdefault("empty_reason", None)
+        return payload
+
     @app.get("/api/v1/judgments/{judgment_id}")
     def get_judgment(judgment_id: str):
         # 权限矩阵：GET judgments/subgraph/patterns 匿名只读放行

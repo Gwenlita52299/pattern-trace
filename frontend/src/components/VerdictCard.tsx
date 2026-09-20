@@ -3,6 +3,7 @@
 // loading / failed / no_match / success；四档色卡颜色+图标双编码（a11y）；
 // evidence 列表每条可点击 → 高亮画布对应节点/边。
 import { useAnalysisStore } from "@/store/analysis";
+import RetrievalExplanationPanel from "@/components/RetrievalExplanation";
 
 // 调性规范（docs/design-tone.md）：四档微色彩编码——小圆点 + 文字标签，
 // 大面板永远冷静；琥珀只用于证据/高危。色+图标双编码（a11y）保留。
@@ -213,6 +214,9 @@ export default function VerdictCard({ onRetry, forceLoading }: VerdictCardProps)
           {judgment.latency_ms} ms · model {judgment.id.slice(0, 8)}
         </p>
       )}
+
+      {/* issue #77：检索解释快照抽屉（匹配依据） */}
+      {judgment?.id && <RetrievalExplanationPanel judgmentId={judgment.id} />}
 
       {/* issue #7：结论/数据时间（历史 Judgment 时间版本化） */}
       <dl className="mt-3 grid grid-cols-2 gap-1 border-t border-pt-line pt-2 font-mono text-[10px] text-pt-muted">

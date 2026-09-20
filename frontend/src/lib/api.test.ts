@@ -159,3 +159,28 @@ describe("204 No Content 与 logout（issue #68）", () => {
     errSpy.mockRestore();
   });
 });
+
+describe("issue #77 检索解释快照", () => {
+  it("getRetrievalExplanation 命中正确端点并返回自包含快照", async () => {
+    const { getRetrievalExplanation } = await import("@/lib/api");
+    fetchMock.mockImplementation(async () =>
+      resp({
+        judgment_id: "j1",
+        status: "completed",
+        algorithm_version: "retr-v1",
+        params: { top_k: 4, embedding_model: "stub" },
+        recall: { mode: "hybrid", count: 12, empty_reason: null },
+        candidates: [{ rank: 1, name: "mixer_layering", provenance: "confirmed" }],
+        dropped_by_top_k: 8,
+        empty_reason: null,
+      }),
+    );
+    const snap = await getRetrievalExplanation("j1");
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      "/api/v1/judgments/j1/retrieval-explanation",
+    );
+    expect(snap.algorithm_version).toBe("retr-v1");
+    expect(snap.candidates[0].name).toBe("mixer_layering");
+    expect(snap.dropped_by_top_k).toBe(8);
+  });
+});

@@ -114,6 +114,73 @@ class PatternCandidate:
 @dataclass
 class RetrievalResult:
     candidates: list[PatternCandidate] = field(default_factory=list)
+    # issue #77：检索解释快照元信息——空召回时也要能说明原因
+    # （"明确显示阈值过滤结果，而不是空白或未知错误"）
+    empty_reason: str | None = None   # empty_subgraph | no_recall_match
+    recall_mode: str = ""             # graphormer_online | graphormer_ego | hybrid
+    recall_count: int = 0             # 召回层（rerank 前）候选数
+
+
+# issue #77：检索算法版本——解释快照的自描述字段，检索策略变更须递增，
+# 保证历史快照可追溯（"不受后续检索配置变化影响"）
+RETRIEVAL_ALGORITHM_VERSION = "retr-v1"
+
+
+def explanation_snapshot(result: RetrievalResult, settings) -> dict:
+    """issue #77：检索解释快照——自包含，不依赖 patterns 表当前状态。
+
+    历史 Judgment 的解释不受后续模式编辑或检索配置变化影响（验收要求）：
+    候选的名称/来源/证据等级/全通道分数都写入快照本体。参数区记录本次
+    检索权重、阈值、Top-N/Top-K、embedding/graphormer 模型与算法版本。
+
+    淘汰说明：召回层（recall_count）到精排 Top-K 的差额即 top_k 截断；
+    空召回带 empty_reason（empty_subgraph / no_recall_match），前端据此
+    展示明确结果而非空白。
+    """
+    return {
+        "algorithm_version": RETRIEVAL_ALGORITHM_VERSION,
+        "params": {
+            "w_struct": settings.w_struct,
+            "w_semantic": settings.w_semantic,
+            "channel_w_cos": settings.channel_w_cos,
+            "channel_w_wljac": settings.channel_w_wljac,
+            "channel_w_fp": settings.channel_w_fp,
+            "channel_w_ov": settings.channel_w_ov,
+            "wl_iterations": settings.wl_iterations,
+            "recall_limit": settings.retrieval_recall_limit,
+            "top_k": settings.retrieval_top_k,
+            "embedding_model": settings.embedding_model,
+            "embedding_dim": settings.embedding_dim,
+            "graphormer_model": settings.graphormer_model_name,
+            "graphormer_query_mode": settings.graphormer_query_mode,
+        },
+        "recall": {
+            "mode": result.recall_mode,
+            "count": result.recall_count,
+            "empty_reason": result.empty_reason,
+        },
+        "candidates": [
+            {
+                "rank": i,
+                "pattern_id": c.pattern_id,
+                "name": c.name,
+                "provenance": c.provenance,
+                "evidence_grade": c.evidence_grade,
+                "source": c.source,
+                "similarity_score": c.similarity_score,
+                "structural_similarity": c.structural_similarity,
+                "semantic_similarity": c.semantic_similarity,
+                "wl_kernel_score": c.wl_kernel_score,
+                "fp_score": c.fp_score,
+                "ov_score": c.ov_score,
+                "difference_note": c.difference_note,
+            }
+            for i, c in enumerate(result.candidates, start=1)
+        ],
+        # 精排 Top-K 截断掉的候选数（阈值过滤说明，issue #77 验收第 4 项）
+        "dropped_by_top_k": max(
+            0, result.recall_count - len(result.candidates)),
+    }
 
 
 def subgraphresult_to_canonical(result) -> dict:
@@ -211,13 +278,15 @@ class Retriever:
         canon = (subgraph if isinstance(subgraph, dict)
                  else subgraphresult_to_canonical(subgraph))
         if not canon.get("nodes"):
-            return RetrievalResult()  # RT-18：空子图 → 明确的无匹配信号
+            # RT-18：空子图 → 明确的无匹配信号（issue #77：原因进快照）
+            return RetrievalResult(empty_reason="empty_subgraph")
 
         recall_limit = self.settings.retrieval_recall_limit
         # 查询向量三级链（issue #82）：在线 ego 前向（live 全覆盖，依赖
         # optional torch/transformers）→ ego 语料查表池化（评测/已知地址）
         # → hybrid 文本+结构召回。每级失败/覆盖不足自动降级。
         mode = getattr(self.settings, "graphormer_query_mode", "auto")
+        recall_mode = "hybrid"
         qvec = None
         if mode in ("auto", "online"):
             try:
@@ -226,8 +295,12 @@ class Retriever:
                 query_vector_online = None
             if query_vector_online is not None:
                 qvec = query_vector_online(canon)
+                if qvec is not None:
+                    recall_mode = "graphormer_online"
         if qvec is None:
             qvec = graphormer_query_vector(canon)
+            if qvec is not None:
+                recall_mode = "graphormer_ego"
         if qvec is not None:
             recalled = self._graphormer_recall(
                 qvec, exclude_ids=exclude_ids or [], limit=recall_limit)
@@ -239,10 +312,15 @@ class Retriever:
                                            exclude_ids=exclude_ids or [],
                                            limit=recall_limit)
         if not recalled:
-            return RetrievalResult()
+            return RetrievalResult(empty_reason="no_recall_match",
+                                   recall_mode=recall_mode)
 
         notify("wl_rerank")
-        return self._rerank(canon, recalled, k or self.settings.retrieval_top_k)
+        result = self._rerank(canon, recalled,
+                              k or self.settings.retrieval_top_k)
+        result.recall_mode = recall_mode
+        result.recall_count = len(recalled)
+        return result
 
     # -- 召回 -------------------------------------------------------------
     def _graphormer_recall(self, qvec, *, exclude_ids: list[str],

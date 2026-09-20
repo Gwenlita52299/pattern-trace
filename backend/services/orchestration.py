@@ -268,14 +268,13 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             _report_stage(row.id, stage, settings),
             _record_stage(session, row.id, stage)))
 
-    # issue #78：检索有效性观测点——本次召回/精排返回的候选快照落库，
-    # E2E 断言 matched_pattern ∈ 候选名集合的依据（轮询响应不含候选列表）
-    _record_event(session, row.id, None, "stage:retrieval_done", detail={
-        "candidates": [{"id": c.pattern_id, "name": c.name,
-                        "score": c.similarity_score}
-                       for c in retrieval.candidates],
-        "kb_candidate_count": len(retrieval.candidates),
-    })
+    # issue #78/#77：检索有效性观测点——完整检索解释快照落库
+    # （自包含：参数 + 召回元信息 + 候选全通道分数；E2E 断言
+    # matched_pattern ∈ 候选名集合的依据，历史判定不受后续配置/编辑影响）
+    from ..retrieval.retriever import explanation_snapshot
+
+    _record_event(session, row.id, None, "stage:retrieval_done",
+                  detail=explanation_snapshot(retrieval, settings))
     session.commit()
 
     judge = LLMJudge(client=get_llm_client(settings),

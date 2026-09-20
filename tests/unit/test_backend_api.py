@@ -490,3 +490,89 @@ class TestMockScenarioChannel:
                     os.environ[key] = value
             reset_settings()
             reset_stores()
+
+
+class TestRetrievalExplanation:
+    """issue #77：检索解释快照（匹配依据）端点。"""
+
+    @requires_db
+    def test_snapshot_self_contained_and_consistent(self, api_client):
+        """快照含参数/召回元信息/候选全通道分数+rank，且候选与 LLM 所见一致。"""
+        _clear_judgments()
+        r = api_client.post("/api/v1/addresses/analyze",
+                            json={"address": _demo_seed(), "hops": 1})
+        jid = r.json()["judgment_id"]
+        payload = _poll_terminal(api_client, jid)
+        assert payload["status"] == "completed", payload
+
+        resp = api_client.get(
+            f"/api/v1/judgments/{jid}/retrieval-explanation")
+        assert resp.status_code == 200
+        snap = resp.json()
+
+        # 参数区：可复现（权重/阈值/模型/算法版本）
+        assert snap["algorithm_version"] == "retr-v1"
+        for key in ("w_struct", "w_semantic", "channel_w_cos", "channel_w_wljac",
+                    "channel_w_fp", "channel_w_ov", "wl_iterations",
+                    "recall_limit", "top_k", "embedding_model",
+                    "embedding_dim", "graphormer_model",
+                    "graphormer_query_mode"):
+            assert key in snap["params"], key
+        assert snap["params"]["top_k"] >= 1
+
+        # 召回元信息：模式 + 计数（空态原因字段存在）
+        assert snap["recall"]["mode"] in ("graphormer_online", "graphormer_ego",
+                                          "hybrid")
+        assert isinstance(snap["recall"]["count"], int)
+        assert "empty_reason" in snap["recall"]
+
+        # 候选快照：rank 连续 + 全通道分数 + 来源性质（自包含）
+        for i, c in enumerate(snap["candidates"], start=1):
+            assert c["rank"] == i
+            for key in ("pattern_id", "name", "provenance", "evidence_grade",
+                        "source", "similarity_score", "structural_similarity",
+                        "semantic_similarity", "wl_kernel_score",
+                        "fp_score", "ov_score", "difference_note"):
+                assert key in c, key
+        assert snap["dropped_by_top_k"] == max(
+            0, snap["recall"]["count"] - len(snap["candidates"]))
+
+        # 一致性：LLM 命中的模式必须来自本快照候选（与 judge 输入同源）
+        matched = payload.get("matched_pattern_name")
+        if matched:
+            assert matched in [c["name"] for c in snap["candidates"]]
+
+    @requires_db
+    def test_anonymous_read_matches_judgment_access_rules(self, api_client):
+        """权限与 GET judgments 一致（匿名只读放行）。"""
+        _clear_judgments()
+        r = api_client.post("/api/v1/addresses/analyze",
+                            json={"address": _demo_seed(), "hops": 1})
+        jid = r.json()["judgment_id"]
+        _poll_terminal(api_client, jid)
+        assert api_client.get(f"/api/v1/judgments/{jid}").status_code == 200
+        assert api_client.get(
+            f"/api/v1/judgments/{jid}/retrieval-explanation").status_code == 200
+
+    def test_unknown_judgment_404(self, api_client):
+        resp = api_client.get(
+            "/api/v1/judgments/00000000-0000-0000-0000-000000000000/retrieval-explanation")
+        assert resp.status_code == 404
+
+    @requires_db
+    def test_in_progress_reports_empty_reason(self, api_client, monkeypatch):
+        """快照未生成时明确区分「进行中」，前端展示进度而非错误。"""
+        _clear_judgments()
+
+        async def _slow(judgment_id):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr("backend.services.orchestration.run_analysis", _slow)
+        r = api_client.post("/api/v1/addresses/analyze",
+                            json={"address": _demo_seed(), "hops": 1})
+        jid = r.json()["judgment_id"]
+        snap = api_client.get(
+            f"/api/v1/judgments/{jid}/retrieval-explanation").json()
+        assert snap["status"] in ("queued", "processing")
+        assert snap["empty_reason"] == "analysis_in_progress"
+        assert snap["candidates"] == []
