@@ -5,6 +5,7 @@
 import { useAnalysisStore } from "@/store/analysis";
 import RetrievalExplanationPanel from "@/components/RetrievalExplanation";
 import { evidenceTag, shortId } from "@/lib/evidence-display";
+import { tokenizeReasoning } from "@/lib/reasoning-highlight";
 
 // 调性规范（docs/design-tone.md）：四档微色彩编码——小圆点 + 文字标签，
 // 大面板永远冷静；琥珀只用于证据/高危。色+图标双编码（a11y）保留。
@@ -178,8 +179,22 @@ export default function VerdictCard({ onRetry, forceLoading }: VerdictCardProps)
       )}
 
       {judgment?.reasoning && (
-        <p className="mt-3 whitespace-pre-wrap text-xs leading-relaxed text-pt-muted">
-          {judgment.reasoning}
+        <p className="mt-3 min-w-0 whitespace-pre-wrap break-words text-xs leading-relaxed text-pt-muted">
+          {tokenizeReasoning(judgment.reasoning).map((t, i) =>
+            t.type === "text" ? (
+              <span key={i}>{t.display}</span>
+            ) : (
+              <span
+                key={i}
+                title={t.value}
+                className={`break-all font-mono font-semibold ${
+                  t.type === "addr" ? "text-pt-amber-hi" : "text-pt-medium"
+                }`}
+              >
+                {t.display}
+              </span>
+            ),
+          )}
         </p>
       )}
 
