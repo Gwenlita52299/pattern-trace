@@ -224,6 +224,38 @@ class TestThorchainDecoder:
         d = ThorchainDecoder()
         assert d.try_decode(OpReturnPayload(vout=0, payload=b"s:THOR.RUNE")) is not None
 
+    def test_symbol_prefix_swap_regression(self):
+        """链上实测漏检回归：``=:r:thor1lpe8…``（"=" 是官方 SWAP 简写）。
+
+        真实数据：tx 13c74e005dc9a140c1bc468a1bc2a3719e235af218bdb1f95d69dbfe26709f13
+        的 vout[1] OP_RETURN（59B pushdata，hex 3d3a723a74686f72…），
+        修复前被判 unknown_op_return → 跨链交易未被标记。
+        """
+        d = ThorchainDecoder()
+        payload = bytes.fromhex(
+            "3d3a723a74686f72316c7065387a35757077373773373739687978")
+        m = d.try_decode(OpReturnPayload(vout=1, payload=payload))
+        assert m is not None
+        assert m.protocol == "thorchain" and m.channel == "op_return"
+        # 带 limit 的完整形态
+        assert d.try_decode(OpReturnPayload(
+            vout=0, payload=b"=:r:thor1lpe8z5upw7ss779hyx:0/1/0")) is not None
+        assert d.try_decode(OpReturnPayload(
+            vout=0, payload=b"=:BTC.BTC:bc1qxy")) is not None
+
+    def test_symbol_prefix_add_withdraw(self):
+        d = ThorchainDecoder()
+        assert d.try_decode(OpReturnPayload(
+            vout=0, payload=b"+:THOR.RUNE")) is not None
+        assert d.try_decode(OpReturnPayload(
+            vout=0, payload=b"-:THOR.RUNE")) is not None
+
+    def test_symbol_prefix_requires_asset_segment(self):
+        d = ThorchainDecoder()
+        # 只有符号或空资产段 → 不匹配（防误报）
+        assert d.try_decode(OpReturnPayload(vout=0, payload=b"=")) is None
+        assert d.try_decode(OpReturnPayload(vout=0, payload=b"=:")) is None
+
     def test_rejects_unknown(self):
         d = ThorchainDecoder()
         assert d.try_decode(OpReturnPayload(vout=0, payload=b"HELLO WORLD")) is None

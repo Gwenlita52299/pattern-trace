@@ -26,6 +26,10 @@ _ACTIONS = ("SWAP", "ADD", "WITHDRAW", "LOOP", "PERMISSION",
 # 紧凑/缩短 memo 的单字母动作（大小写不敏感）：
 #   s:  → SWAP,  a: → ADD,  w: → WITHDRAW,  l: → LOOP
 _COMPACT = ("S", "A", "W", "L", "P", "R", "D")
+# 官方符号简写（THORChain memo 规范）："= " 等价 SWAP，"+ " 等价 ADD，
+# "- " 等价 WITHDRAW。链上实测漏检案例：``=:r:thor1lpe8z5upw7ss779hyx…``
+# （= 交换为 RUNE 并指定 thor 目标地址；vout OP_RETURN 59B pushdata）
+_SYMBOL_ACTIONS = ("=", "+", "-")
 
 
 class ThorchainDecoder:
@@ -57,6 +61,12 @@ class ThorchainDecoder:
         # 3) 紧凑前缀 `s:`（无前置冒号）
         if head in _COMPACT and ":" in text:
             return self._match(text)
+        # 4) 符号简写 `=:<asset>[:<dest>][:<limit>]`（"=" 官方等价 SWAP；
+        #    链上实测 `=:r:thor1lpe8…` 曾漏检）与 `+:` / `-:`
+        if text[0] in _SYMBOL_ACTIONS:
+            parts = text.split(":", 2)
+            if len(parts) >= 2 and parts[1].strip():
+                return self._match(text)
         return None
 
     @staticmethod
