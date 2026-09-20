@@ -185,3 +185,27 @@ describe("issue #77 检索解释快照", () => {
     expect(snap.dropped_by_top_k).toBe(8);
   });
 });
+
+describe("issue #84 模式详情", () => {
+  it("getPattern 路径正确（不带重复 /api/v1 前缀）并可带 max_nodes", async () => {
+    const { getPattern } = await import("@/lib/api");
+    fetchMock.mockImplementation(async () =>
+      resp({ id: "p1", name: "n", canonical_subgraph: { nodes: [], edges: [] } }),
+    );
+    await getPattern("p1", 20);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "/api/v1/patterns/p1?max_nodes=20",
+    );
+    await getPattern("p2");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("/api/v1/patterns/p2");
+  });
+
+  it("getJudgment 路径正确（详情页对比模式用）", async () => {
+    const { getJudgment } = await import("@/lib/api");
+    fetchMock.mockImplementation(async () =>
+      resp({ id: "j1", address: "bc1q", status: "completed" }),
+    );
+    await getJudgment("j1");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/api/v1/judgments/j1");
+  });
+});

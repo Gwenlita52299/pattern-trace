@@ -843,6 +843,43 @@ def create_app() -> FastAPI:
             "pages": math.ceil(total / page_size) if total else 0,
         }
 
+    @app.get("/api/v1/patterns/{pattern_id}")
+    def get_pattern(
+        pattern_id: str,
+        max_nodes: int = Query(default=300, ge=1, le=1000),
+    ):
+        """issue #84：单条模式详情（含 canonical 子图，供结构预览/对比）。
+
+        权限同 patterns 列表（公开只读）。KB 里存在 2,000+ 节点的大闭包
+        （p90≈2,081），全量回传既拖慢前端布局也无可视化价值——按
+        first_layer 升序（种子与近层优先）截断到 max_nodes，返回
+        graph_truncated 与总量供前端明确提示。
+        """
+        from ..models.knowledge import Pattern
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Pattern, pattern_id)
+        if row is None:
+            raise ProblemError(404, "Pattern not found", "NOT_FOUND")
+
+        canon = row.canonical_subgraph or {}
+        nodes = list(canon.get("nodes") or [])
+        edges = list(canon.get("edges") or [])
+        total_nodes, total_edges = len(nodes), len(edges)
+        truncated = total_nodes > max_nodes
+        if truncated:
+            nodes, edges = _bfs_truncate(nodes, edges, max_nodes)
+
+        return {
+            **_pattern_summary(row),
+            "description": row.description or "",
+            "node_count": total_nodes,
+            "edge_count": total_edges,
+            "graph_truncated": truncated,
+            "displayed_node_count": len(nodes),
+            "canonical_subgraph": {"nodes": nodes, "edges": edges},
+        }
+
     # ---- 案件管理（阶段5 · 业务闭环）----
     def _load_owned_case(session, user: dict, case_id: str):
         """加载案件并做水平越权隔离：非本人案件一律 404 不泄露存在性（SEC-01）。"""
@@ -1236,6 +1273,50 @@ def _case_payload(c: Case) -> dict:
         **_case_summary(c),
         "description": c.description,
     }
+
+
+def _bfs_truncate(nodes: list, edges: list,
+                  max_nodes: int) -> tuple[list, list]:
+    """issue #84：按 BFS 连通性截断超大闭包（保证边可见、结构可读）。
+
+    不做连通截断而按层硬切时，大 hub 闭包的 L0 动辄 2,000+ 节点，
+    切出的全是孤立节点、一条边都留不下（实测 2,448 节点闭包
+    max_nodes=100 → 0 边）。
+
+    起点选**度最大的节点**：KB 里有 249 个巨型 hub 闭包（单笔交易
+    数千笔），其 L0 seed 往往只是 hub 的上游小节点，从 seed 出发
+    只能覆盖个位数节点；从 hub 出发才能展示该图的真实中心结构。
+    """
+    from collections import deque
+
+    by_id = {n.get("id"): n for n in nodes}
+    adj: dict[str, list] = {}
+    for e in edges:
+        s, t = e.get("source"), e.get("target")
+        if s in by_id and t in by_id:
+            adj.setdefault(s, []).append(t)
+            adj.setdefault(t, []).append(s)
+    start = min(
+        (n.get("id") for n in nodes),
+        key=lambda i: (-len(adj.get(i, ())), str(i)),
+    )
+
+    order = [start]
+    seen = {start}
+    queue = deque([start])
+    while queue and len(order) < max_nodes:
+        u = queue.popleft()
+        for v in adj.get(u, ()):
+            if v in seen:
+                continue
+            seen.add(v)
+            order.append(v)
+            if len(order) >= max_nodes:
+                break
+            queue.append(v)
+    keep_edges = [e for e in edges
+                  if e.get("source") in seen and e.get("target") in seen]
+    return [by_id[i] for i in order], keep_edges
 
 
 def _pattern_summary(p) -> dict:

@@ -1,6 +1,7 @@
 "use client";
 // Pattern 知识库列表：分页/筛选同步 URL searchParams（FE-18），
 // 复制链接或刷新后状态保留。
+import Link from "next/link";
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
@@ -147,7 +148,15 @@ function PatternsContent() {
             <tbody>
               {data.items.map((p) => (
                 <tr key={p.id} className="border-b border-white/5 hover:bg-pt-panel">
-                  <td className="py-2 font-mono text-xs text-pt-ink">{p.name}</td>
+                  <td className="py-2 font-mono text-xs">
+                    <Link
+                      href={`/patterns/${encodeURIComponent(p.id)}`}
+                      title="查看模式子图"
+                      className="text-pt-ink underline decoration-pt-line underline-offset-2 hover:text-pt-amber-hi"
+                    >
+                      {p.name}
+                    </Link>
+                  </td>
                   <td className="py-2 text-xs text-pt-muted">{p.source}</td>
                   <td className="py-2 text-xs">
                     <span

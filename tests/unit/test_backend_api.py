@@ -576,3 +576,80 @@ class TestRetrievalExplanation:
         assert snap["status"] in ("queued", "processing")
         assert snap["empty_reason"] == "analysis_in_progress"
         assert snap["candidates"] == []
+
+
+class TestPatternDetail:
+    """issue #84：单条模式详情端点（结构预览/对比的数据源）。"""
+
+    @requires_db
+    def test_detail_returns_subgraph_and_metadata(self, api_client):
+        r = api_client.get("/api/v1/patterns",
+                           params={"page_size": 1, "evidence_grade": "A"})
+        pid = r.json()["items"][0]["id"]
+
+        d = api_client.get(f"/api/v1/patterns/{pid}")
+        assert d.status_code == 200
+        body = d.json()
+        for key in ("id", "name", "source", "provenance", "evidence_grade",
+                    "seed_address", "description", "node_count", "edge_count",
+                    "graph_truncated", "displayed_node_count",
+                    "canonical_subgraph"):
+            assert key in body, key
+        sub = body["canonical_subgraph"]
+        assert isinstance(sub["nodes"], list) and isinstance(sub["edges"], list)
+        assert body["node_count"] >= len(sub["nodes"])
+        # 边闭合：截断后不得出现悬空端点（前端渲染契约）
+        ids = {n["id"] for n in sub["nodes"]}
+        assert all(e["source"] in ids and e["target"] in ids
+                   for e in sub["edges"])
+
+    @requires_db
+    def test_detail_public_read_and_404(self, api_client):
+        # 匿名可读（与 patterns 列表同权限）
+        r = api_client.get("/api/v1/patterns",
+                           params={"page_size": 1})
+        pid = r.json()["items"][0]["id"]
+        assert api_client.get(f"/api/v1/patterns/{pid}").status_code == 200
+        assert api_client.get(
+            "/api/v1/patterns/00000000-0000-0000-0000-000000000000"
+        ).status_code == 404
+
+    @requires_db
+    def test_large_pattern_truncated_by_max_nodes(self, api_client):
+        """超大闭包按 first_layer 截断，并给出总量与截断标志。"""
+        from backend.models.knowledge import Pattern
+
+        with Session(get_db_engine()) as session:
+            session.add(Pattern(
+                id="p-trunc-test", name="trunc_test", source="lazarus_confirmed",
+                provenance="confirmed", evidence_grade="A",
+                seed_address="bc1qseed", content_hash="h" * 64,
+                canonical_subgraph={
+                    "nodes": [{"id": f"addr:{i}", "kind": "address",
+                               "first_layer": i // 10} for i in range(50)],
+                    "edges": [{"id": f"e{i}", "source": f"addr:{i}",
+                               "target": f"addr:{i + 1}"} for i in range(49)],
+                }))
+            session.commit()
+        try:
+            body = api_client.get(
+                "/api/v1/patterns/p-trunc-test",
+                params={"max_nodes": 20}).json()
+            assert body["node_count"] == 50
+            assert body["edge_count"] == 49
+            assert body["graph_truncated"] is True
+            assert body["displayed_node_count"] == 20
+            assert len(body["canonical_subgraph"]["nodes"]) == 20
+            # BFS 连通截断：切出的子图必须仍有边（按层硬切会只剩孤立节点）
+            assert len(body["canonical_subgraph"]["edges"]) > 0
+            ids = {n["id"] for n in body["canonical_subgraph"]["nodes"]}
+            assert all(e["source"] in ids and e["target"] in ids
+                       for e in body["canonical_subgraph"]["edges"])
+            # 小图不截断
+            full = api_client.get("/api/v1/patterns/p-trunc-test").json()
+            assert full["graph_truncated"] is False
+            assert full["displayed_node_count"] == 50
+        finally:
+            with Session(get_db_engine()) as session:
+                session.execute(delete(Pattern).where(Pattern.id == "p-trunc-test"))
+                session.commit()

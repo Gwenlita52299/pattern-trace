@@ -234,3 +234,55 @@ export async function getRetrievalExplanation(
     `/judgments/${encodeURIComponent(judgmentId)}/retrieval-explanation`,
   );
 }
+
+// ---------------------------------------------------------------------------
+// issue #84：模式详情（结构预览/对比）——canonical schema 与 analyze 子图同构，
+// 可直接交给 GraphCanvas 渲染
+// ---------------------------------------------------------------------------
+export interface PatternDetail {
+  id: string;
+  name: string;
+  source: string;
+  provenance: string;   // confirmed | synthetic | negative
+  evidence_grade: string;
+  seed_address: string;
+  description: string;
+  node_count: number;   // KB 中完整规模
+  edge_count: number;
+  graph_truncated: boolean;      // 超过 max_nodes 按层级截断
+  displayed_node_count: number;
+  embedding_model?: string;
+  created_at?: string | null;
+  canonical_subgraph: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+  };
+}
+
+export async function getPattern(
+  patternId: string,
+  maxNodes?: number,
+): Promise<PatternDetail> {
+  return api<PatternDetail>(`/patterns/${encodeURIComponent(patternId)}`, {
+    params: maxNodes ? { max_nodes: maxNodes } : undefined,
+  });
+}
+
+export interface JudgmentDetail {
+  id: string;
+  address: string;
+  status: string;
+  risk_level?: string | null;
+  matched_pattern_name?: string | null;
+  confidence?: number | null;
+  reasoning?: string | null;
+  subgraph?: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+  };
+  [key: string]: unknown;
+}
+
+export async function getJudgment(judgmentId: string): Promise<JudgmentDetail> {
+  return api<JudgmentDetail>(`/judgments/${encodeURIComponent(judgmentId)}`);
+}

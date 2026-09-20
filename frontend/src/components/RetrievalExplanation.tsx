@@ -2,6 +2,7 @@
 // 检索解释快照抽屉（issue #77）：展示 Top-K 候选的结构/语义/WL/融合分数
 // 与排名、淘汰说明、来源性质（合成模板必须持续标识「非真实链上证据」）。
 // 懒加载：展开时才请求 explanation，避免拖慢 verdict 首屏。
+import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import {
@@ -48,20 +49,29 @@ function fmtScore(v: number | undefined): string {
   return typeof v === "number" ? v.toFixed(3) : "-";
 }
 
-function CandidateRow({ c }: { c: ExplanationCandidate }) {
+function CandidateRow({
+  c,
+  compareJudgmentId,
+}: {
+  c: ExplanationCandidate;
+  compareJudgmentId: string;
+}) {
   const badge = provenanceBadge(c.provenance);
   return (
     <li
-      className="rounded border border-pt-line bg-pt-panel-2 px-2.5 py-2"
+      className="rounded border border-pt-line bg-pt-panel-2 px-2.5 py-2 transition-colors hover:border-pt-amber/60"
       data-testid={`match-evidence-${c.rank}`}
     >
       <div className="flex items-baseline justify-between gap-2">
-        <span className="min-w-0 truncate">
-          <span className="mr-1.5 font-mono text-[10px] text-pt-faint">
-            #{c.rank}
-          </span>
-          <span className="font-mono text-[11px] text-pt-ink">{c.name}</span>
-        </span>
+        <Link
+          href={`/patterns/${encodeURIComponent(c.pattern_id)}?compare=${encodeURIComponent(compareJudgmentId)}`}
+          title="查看该模式子图（并与本次分析子图对比）"
+          data-testid={`pattern-link-${c.rank}`}
+          className="min-w-0 truncate font-mono text-[11px] text-pt-ink underline decoration-pt-line underline-offset-2 hover:text-pt-amber-hi"
+        >
+          <span className="mr-1.5 text-[10px] text-pt-faint">#{c.rank}</span>
+          {c.name}
+        </Link>
         <span className="shrink-0 font-mono text-[10px] text-pt-amber-hi">
           final {fmtScore(c.similarity_score)}
         </span>
@@ -186,7 +196,8 @@ export default function RetrievalExplanationPanel({
               {candidates.length > 0 ? (
                 <ul className="space-y-1.5">
                   {candidates.map((c) => (
-                    <CandidateRow key={c.pattern_id} c={c} />
+                    <CandidateRow key={c.pattern_id} c={c}
+                                  compareJudgmentId={judgmentId} />
                   ))}
                 </ul>
               ) : (
