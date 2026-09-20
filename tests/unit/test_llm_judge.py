@@ -462,6 +462,9 @@ class TestPromptAndPerf:
         # issue #83：confidence 锚定引导——校准分数映射到数值档
         assert "flagged_no_pattern (matched=null, medium/high)" \
                " with concrete anomalous behavior" in SYSTEM_PROMPT
+        # v11：跨链 swap/bridge 属具体反常行为（confidence 锚点）
+        assert "cross-chain " \
+               "swap/bridge hop such as THORChain" in SYSTEM_PROMPT
         assert "→ 0.80-0.95" in SYSTEM_PROMPT
         assert "Never output the same confidence" not in SYSTEM_PROMPT \
             or "Ground it in evidence" in SYSTEM_PROMPT

@@ -32,7 +32,7 @@ class JudgmentValidationError(Exception):
 VALID_RISK_LEVELS = {"high", "medium", "low"}
 VALID_ACTIONS = {"freeze", "monitor", "review", "none"}
 
-PROMPT_VERSION = "v10"  # v10：#83 方案 A——confidence 锚定引导（校准分数 → 数值档）
+PROMPT_VERSION = "v11"  # v11：跨链 swap/bridge 列入 concrete anomalous behavior（conf 锚点）
 MAX_RETRIES = 3  # 总调用上限（首调 + 最多 2 次重试）
 CACHE_TTL_SECONDS = 7 * 86400  # spec §5.3
 BUILDER_VERSION = "gb-v1"
@@ -65,7 +65,8 @@ evidence only (long evidence lists get truncated and fail validation).
 3. Matching state is expressed ONLY by matched_pattern (null = no KB match), \
 never by risk_level. If no pattern matches, judge the observed risk directly: \
 risk_level="medium" or "high" for suspicious structure (mixer contact, anomalous \
-behavior such as address-reuse returns, peel-and-return into coinjoin) with \
+behavior such as address-reuse returns, peel-and-return into coinjoin, or funds \
+routed into a cross-chain swap/bridge — e.g. a THORChain OP_RETURN hop) with \
 recommended_action="review"; risk_level="low" only when no suspicious structure \
 is observed.
 4. Do not hallucinate transaction IDs or addresses.
@@ -76,7 +77,8 @@ strength — do NOT collapse different situations to the same value: \
 → 0.80-0.95;
 - KB match with partial correspondence → 0.60-0.75;
 - flagged_no_pattern (matched=null, medium/high) with concrete anomalous \
-behavior (address-reuse return, peel-and-return into coinjoin) → 0.65-0.85;
+behavior (address-reuse return, peel-and-return into coinjoin, cross-chain \
+swap/bridge hop such as THORChain) → 0.65-0.85;
 - flagged_no_pattern with weak or generic suspicion → 0.40-0.60;
 - low risk with no suspicious structure → 0.20-0.40.
 6. reasoning must reference specific structural features of the input subgraph.
