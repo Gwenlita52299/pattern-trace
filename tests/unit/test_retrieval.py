@@ -427,3 +427,48 @@ class TestGraphormerOnlineChain:
         assert indeg[0] == 1 and outdeg[0] == 2          # deg_bucket(d)=min(d,7)+1
         assert sp.shape == (2, 2) and sp[0, 1] == 1      # BFS 短路距离
         assert edges.shape == (2, 2, 5, 4)               # 4 槽边特征
+
+
+class TestExplanationSnapshotSerializable:
+    """issue #77 回归：快照必须可 JSONB 序列化。
+
+    SQL 表达式可能返回 Decimal（numeric 字面量列，如 graphormer 路径的
+    `0.0 AS sem_sim`）或 numpy 标量——直接落库会 TypeError 并使整个
+    分析任务失败（曾导致 worker PendingRollbackError）。
+    """
+
+    def test_decimal_and_numpy_and_none_coerced_to_float(self):
+        import json
+        from decimal import Decimal
+
+        import numpy as np
+
+        from backend.core.config import get_settings
+        from backend.retrieval.retriever import (
+            PatternCandidate,
+            RetrievalResult,
+            explanation_snapshot,
+        )
+
+        snap = explanation_snapshot(
+            RetrievalResult(
+                candidates=[PatternCandidate(
+                    pattern_id="p1", name="n1", provenance="confirmed",
+                    evidence_grade="A", source="lazarus_confirmed",
+                    similarity_score=Decimal("0.61"),
+                    structural_similarity=np.float32(0.44),
+                    semantic_similarity=Decimal("0.0"),
+                    wl_kernel_score=Decimal("0.058"),
+                    fp_score=None,
+                    ov_score=np.float64(0.71))],
+                recall_mode="graphormer_ego", recall_count=500),
+            get_settings())
+        json.dumps(snap)  # 不抛 TypeError 即可（Decimal/np 已转 float）
+        c = snap["candidates"][0]
+        assert c["similarity_score"] == 0.61
+        assert c["semantic_similarity"] == 0.0
+        assert c["fp_score"] == 0.0  # None → 0.0
+        for key in ("similarity_score", "structural_similarity",
+                    "semantic_similarity", "wl_kernel_score",
+                    "fp_score", "ov_score"):
+            assert isinstance(c[key], float), key

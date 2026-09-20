@@ -126,6 +126,16 @@ class RetrievalResult:
 RETRIEVAL_ALGORITHM_VERSION = "retr-v1"
 
 
+def _as_float(v) -> float:
+    """JSONB 可序列化兜底：Decimal / numpy 标量 / None → python float。"""
+    if v is None:
+        return 0.0
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def explanation_snapshot(result: RetrievalResult, settings) -> dict:
     """issue #77：检索解释快照——自包含，不依赖 patterns 表当前状态。
 
@@ -167,12 +177,13 @@ def explanation_snapshot(result: RetrievalResult, settings) -> dict:
                 "provenance": c.provenance,
                 "evidence_grade": c.evidence_grade,
                 "source": c.source,
-                "similarity_score": c.similarity_score,
-                "structural_similarity": c.structural_similarity,
-                "semantic_similarity": c.semantic_similarity,
-                "wl_kernel_score": c.wl_kernel_score,
-                "fp_score": c.fp_score,
-                "ov_score": c.ov_score,
+                # JSONB 可序列化兜底：Decimal/numpy 标量一律转 float
+                "similarity_score": _as_float(c.similarity_score),
+                "structural_similarity": _as_float(c.structural_similarity),
+                "semantic_similarity": _as_float(c.semantic_similarity),
+                "wl_kernel_score": _as_float(c.wl_kernel_score),
+                "fp_score": _as_float(c.fp_score),
+                "ov_score": _as_float(c.ov_score),
                 "difference_note": c.difference_note,
             }
             for i, c in enumerate(result.candidates, start=1)
@@ -339,7 +350,7 @@ class Retriever:
                    retrieval_fingerprint,
                    1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS graphormer_sim,
                    1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS struct_sim,
-                   0.0 AS sem_sim,
+                   CAST(0.0 AS double precision) AS sem_sim,
                    (graphormer_embedding <=> CAST(:gv AS vector)) AS dist
             FROM patterns
             WHERE graphormer_embedding IS NOT NULL
@@ -477,12 +488,15 @@ class Retriever:
                 name=row["name"],
                 description=row.get("description") or "",
                 canonical_subgraph=cand_canon,
-                similarity_score=max(0.0, min(final, 1.0)),
-                structural_similarity=round(row["struct_sim"], 6),
-                semantic_similarity=round(row["sem_sim"], 6),
-                wl_kernel_score=round(wl, 6),
-                fp_score=round(fp, 6),
-                ov_score=round(ov, 6),
+                # issue #77：分数统一为 python float——SQL 表达式可能返回
+                # Decimal（如 numeric 字面量列）或 numpy 标量，直接进
+                # JSONB 快照会序列化失败
+                similarity_score=float(max(0.0, min(final, 1.0))),
+                structural_similarity=float(round(row["struct_sim"], 6)),
+                semantic_similarity=float(round(row["sem_sim"], 6)),
+                wl_kernel_score=float(round(wl, 6)),
+                fp_score=float(round(fp, 6)),
+                ov_score=float(round(ov, 6)),
                 evidence_grade=row.get("evidence_grade") or "A",
                 source=row.get("source") or "lazarus_confirmed",
                 provenance=row.get("provenance") or "confirmed",
