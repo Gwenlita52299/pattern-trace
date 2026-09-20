@@ -176,7 +176,8 @@ describe("issue #77 检索解释快照", () => {
       }),
     );
     const snap = await getRetrievalExplanation("j1");
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
+    // 精确断言防双前缀回归：API_BASE 已含 /api/v1，path 不得再带
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
       "/api/v1/judgments/j1/retrieval-explanation",
     );
     expect(snap.algorithm_version).toBe("retr-v1");

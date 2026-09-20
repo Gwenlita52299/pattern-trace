@@ -5,6 +5,7 @@
 import { useCallback, useState } from "react";
 
 import {
+  ApiError,
   getRetrievalExplanation,
   type ExplanationCandidate,
   type RetrievalExplanation,
@@ -114,20 +115,25 @@ export default function RetrievalExplanationPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const toggle = useCallback(async () => {
-    const next = !open;
-    setOpen(next);
-    if (!next || snap || loading) return;
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       setSnap(await getRetrievalExplanation(judgmentId));
     } catch (e) {
-      setError((e as Error).message);
+      // 带状态码便于定位（曾出现 404：双前缀路径 /api/v1/api/v1/...）
+      const err = e as ApiError;
+      setError(err.status ? `HTTP ${err.status} ${err.message}` : err.message);
     } finally {
       setLoading(false);
     }
-  }, [open, snap, loading, judgmentId]);
+  }, [judgmentId]);
+
+  const toggle = useCallback(() => {
+    const next = !open;
+    setOpen(next);
+    if (next && !snap && !loading) void load();
+  }, [open, snap, loading, load]);
 
   const recall = snap?.recall;
   const candidates = snap?.candidates ?? [];
@@ -149,9 +155,15 @@ export default function RetrievalExplanationPanel({
             <p className="text-[11px] text-pt-muted">加载检索快照…</p>
           )}
           {error && (
-            <p className="text-[11px] text-pt-amber-hi">
-              检索快照加载失败：{error}
-            </p>
+            <div className="text-[11px] text-pt-amber-hi">
+              <p>检索快照加载失败：{error}</p>
+              <button
+                onClick={() => void load()}
+                className="mt-1 font-mono text-[10px] text-pt-muted underline hover:text-pt-ink"
+              >
+                重试
+              </button>
+            </div>
           )}
           {snap && !loading && !error && (
             <>

@@ -228,7 +228,9 @@ export interface RetrievalExplanation {
 export async function getRetrievalExplanation(
   judgmentId: string,
 ): Promise<RetrievalExplanation> {
+  // 注意：path 不含 /api/v1——API_BASE 已含该前缀，重复会得到
+  // /api/v1/api/v1/... → 404（曾导致「检索快照加载失败：Not Found」）
   return api<RetrievalExplanation>(
-    `/api/v1/judgments/${encodeURIComponent(judgmentId)}/retrieval-explanation`,
+    `/judgments/${encodeURIComponent(judgmentId)}/retrieval-explanation`,
   );
 }
