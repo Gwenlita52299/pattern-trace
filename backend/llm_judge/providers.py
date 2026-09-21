@@ -5,16 +5,30 @@
 统一约定为「尽力 structured output + 本地 Pydantic 硬校验兜底」——
 无论 provider 是否支持 schema 参数，返回值都必须通过本地校验才算有效。
 
+issue #76 重构：具体类只负责"怎么调用上游"；注册（registry）、能力声明
+（capabilities）、并发闸门/重试/计量/脱敏（wrappers）由 backend.core.providers
+统一提供——新增 provider 只需实现 complete() + 声明 CAPABILITIES + 注册。
+
 Mock provider 是端到端测试的关键：不依赖公网或本地 Ollama 即可跑通
-完整判断链路，scenario 由环境变量 LLM_MOCK_SCENARIO 控制。
+完整判断链路，scenario 由环境变量 LLM_MOCK_SCENARIO 控制。它是测试替身，
+**不套统一包装**（避免重试/闸门干扰脚本化场景与 test 直接注入属性）。
 """
 from __future__ import annotations
 
 import abc
+import asyncio
 import json
+import logging
 import os
 import re
+import time
 from typing import TYPE_CHECKING
+
+from backend.core.providers import (REGISTRY, ConcurrencyGate,
+                                    ProviderCapabilities, ProviderError,
+                                    ProviderErrorCode, ProviderMetrics,
+                                    ProviderSpec, RetryPolicy, classify,
+                                    gate_for, log_provider_event)
 
 if TYPE_CHECKING:  # 注解引用 httpx 类型；运行时在各 complete() 内延迟导入
     import httpx
@@ -74,6 +88,19 @@ class _HTTPClient(LLMClient):
         pass  # 子类按需覆写；MVP 用短连接（每次请求独立 client）简化生命周期
 
 
+def _malformed(client, what: str, exc: BaseException) -> ProviderError:
+    """响应结构不符合预期 → invalid_response（issue #76 统一分类）。
+
+    在解析处显式包装，好过依赖错误消息关键词启发式——上游换格式时
+    能明确归因为"响应畸形"而不是让 KeyError 冒到编排层变成 TASK_FAILED。
+    """
+    return ProviderError(
+        ProviderErrorCode.INVALID_RESPONSE,
+        f"malformed {what} response: {exc}",
+        provider=type(client).__name__,
+        model=getattr(client, "model", ""), cause=exc)
+
+
 class OpenAIClient(_HTTPClient):
     """OpenAI chat completions + 原生 response_format json_schema。
 
@@ -83,6 +110,10 @@ class OpenAIClient(_HTTPClient):
     """
 
     strict_schema: bool = True
+    CAPABILITIES = ProviderCapabilities(
+        kind="llm", structured_output=True, native_json_schema=True,
+        requires_api_key=True)
+    last_usage: dict | None = None   # 上游 usage（包装层计量读取）
 
     def __init__(self, base_url: str, api_key: str, model: str,
                  transport: httpx.BaseTransport | None = None):
@@ -128,7 +159,12 @@ class OpenAIClient(_HTTPClient):
                 json=body,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"] or ""
+            data = resp.json()
+        self.last_usage = data.get("usage")
+        try:
+            return data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError) as exc:  # issue #76
+            raise _malformed(self, "chat completion", exc) from exc
 
 
 class VLLMClient(OpenAIClient):
@@ -140,11 +176,18 @@ class DeepSeekClient(OpenAIClient):
     json_schema（只认 json_object），置 strict_schema=False 走 prompt 内嵌兜底。"""
 
     strict_schema = False
+    CAPABILITIES = ProviderCapabilities(
+        kind="llm", structured_output=True, native_json_schema=False,
+        requires_api_key=True)
 
 
 class AnthropicClient(_HTTPClient):
     """Anthropic messages API：无原生 json_schema 参数，
     schema 以文本形式并入 system prompt（spec §2 能力契约），本地硬校验兜底。"""
+
+    CAPABILITIES = ProviderCapabilities(
+        kind="llm", structured_output=True, native_json_schema=False,
+        requires_api_key=True)
 
     def __init__(self, base_url: str, api_key: str, model: str,
                  transport: httpx.BaseTransport | None = None):
@@ -176,12 +219,21 @@ class AnthropicClient(_HTTPClient):
                 },
             )
             resp.raise_for_status()
-            blocks = resp.json().get("content", [])
-            return "".join(b.get("text", "") for b in blocks)
+            data = resp.json()
+        blocks = data.get("content")
+        if not isinstance(blocks, list):
+            raise _malformed(self, "anthropic messages",
+                             ValueError(f"content is {type(blocks).__name__}"))
+        return "".join(b.get("text", "") for b in blocks
+                       if isinstance(b, dict))
 
 
 class OllamaClient(_HTTPClient):
     """Ollama /api/chat：format 参数传 JSON Schema 实现约束解码。"""
+
+    CAPABILITIES = ProviderCapabilities(
+        kind="llm", structured_output=True, native_json_schema=True,
+        requires_api_key=False)
 
     def __init__(self, base_url: str, model: str,
                  transport: httpx.BaseTransport | None = None):
@@ -210,7 +262,11 @@ class OllamaClient(_HTTPClient):
                                      transport=self._transport) as client:
             resp = await client.post(f"{self.base_url}/api/chat", json=body)
             resp.raise_for_status()
-            return resp.json()["message"]["content"] or ""
+            data = resp.json()
+        try:
+            return data["message"]["content"] or ""
+        except (KeyError, TypeError) as exc:  # issue #76
+            raise _malformed(self, "ollama chat", exc) from exc
 
 
 _NODE_ID_PATTERN = re.compile(r"node id=(addr:[^\s\"'`,\]]+)")
@@ -226,6 +282,10 @@ class MockLLMClient(LLMClient):
     （物证统一为 addr），保证响应天然通过引用校验；invalid_* 场景用于
     触发重试/失败路径。
     """
+
+    CAPABILITIES = ProviderCapabilities(
+        kind="llm", structured_output=True, native_json_schema=True,
+        requires_api_key=False)
 
     def __init__(self, scenario: str = "valid_high",
                  response_factory=None, fixed_delay_ms: int = 0):
@@ -308,38 +368,162 @@ class MockLLMClient(LLMClient):
         })
 
 
+class MeteredLLMClient(LLMClient):
+    """统一包装：进程级并发闸门 + 退避重试 + 计量 + 脱敏日志 + 错误分类。
+
+    - 闸门与计量按 provider+model 共享（跨 client 实例、跨 judgment 生效；
+      编排每次分析都新建 client，实例级限制没有意义）
+    - 只重试 retryable 码（timeout/rate_limited/unavailable）；退避等待
+      放在闸门之外，避免占着并发额度空转
+    - usage 取内层 provider 的 last_usage（不提供该属性的 provider 记 0）
+    - provider 层异常统一收敛为 ProviderError；代码缺陷原样上抛
+
+    `wrap_llm_client()` 会为每个内层类型生成动态子类，使
+    `isinstance(client, OpenAIClient)` 等既有契约仍然成立。
+    """
+
+    def __init__(self, inner: LLMClient, *, capabilities: ProviderCapabilities,
+                 gate: ConcurrencyGate, retry: RetryPolicy,
+                 metrics: ProviderMetrics) -> None:
+        self.inner = inner
+        self.capabilities = capabilities
+        self.metrics = metrics
+        self._gate = gate
+        self._retry = retry
+
+    @property
+    def model_name(self) -> str:
+        return self.inner.model_name
+
+    async def complete(self, messages, json_schema=None, temperature=0.0,
+                       max_tokens=4096) -> str:
+        attempts = self._retry.max_retries + 1
+        last_error: ProviderError | None = None
+        for attempt in range(attempts):
+            started = time.perf_counter()
+            try:
+                async with self._gate:
+                    raw = await self.inner.complete(
+                        messages, json_schema=json_schema,
+                        temperature=temperature, max_tokens=max_tokens)
+                self.metrics.record_success(
+                    (time.perf_counter() - started) * 1000,
+                    getattr(self.inner, "last_usage", None))
+                return raw
+            except Exception as exc:  # noqa: BLE001 - 分类后决定重试或上抛
+                err = classify(exc, provider=self.metrics.provider,
+                               model=self.metrics.model)
+                if err is None:
+                    raise  # 非 provider 层错误（编程缺陷）不伪装、不重试
+                self.metrics.record_failure(
+                    err.code, (time.perf_counter() - started) * 1000)
+                if not err.retryable or attempt >= attempts - 1:
+                    raise err from exc
+                last_error = err
+                self.metrics.record_retry()
+                log_provider_event(
+                    self.metrics, "retry", level=logging.WARNING,
+                    attempt=attempt + 1, error_code=err.code.value)
+            await asyncio.sleep(self._retry.delay_for(attempt))
+        raise last_error or ProviderError(
+            ProviderErrorCode.UNAVAILABLE, "provider call failed",
+            provider=self.metrics.provider, model=self.metrics.model)
+
+
+def wrap_llm_client(inner: LLMClient, *, capabilities: ProviderCapabilities,
+                    gate: ConcurrencyGate, retry: RetryPolicy,
+                    metrics: ProviderMetrics) -> MeteredLLMClient:
+    """生成动态子类（同时继承 MeteredLLMClient 与内层类型）。
+
+    这样 `isinstance(get_llm_client(...), OpenAIClient)` 这类既有断言、
+    以及 `judge.client.model_name` 等直接属性访问都不受影响。
+    """
+    cls = type(f"Metered{type(inner).__name__}",
+               (MeteredLLMClient, type(inner)), {})
+    obj = cls.__new__(cls)
+    MeteredLLMClient.__init__(obj, inner, capabilities=capabilities,
+                              gate=gate, retry=retry, metrics=metrics)
+    return obj
+
+
+def _register_llm_providers() -> None:
+    """内置 LLM provider 自注册（issue #76：新增 provider 只需在此加一行）。"""
+
+    def _openai(settings, **kw):
+        return OpenAIClient(
+            base_url=getattr(settings, "llm_base_url", "")
+            or "https://api.openai.com/v1",
+            api_key=getattr(settings, "llm_api_key", ""),
+            model=settings.llm_model, **kw)
+
+    def _anthropic(settings, **kw):
+        return AnthropicClient(
+            base_url=getattr(settings, "llm_base_url", "")
+            or "https://api.anthropic.com",
+            api_key=getattr(settings, "llm_api_key", ""),
+            model=settings.llm_model, **kw)
+
+    def _vllm(settings, **kw):
+        return VLLMClient(
+            base_url=settings.llm_base_url,
+            api_key=getattr(settings, "llm_api_key", "") or "EMPTY",
+            model=settings.llm_model, **kw)
+
+    def _deepseek(settings, **kw):
+        return DeepSeekClient(
+            base_url=getattr(settings, "llm_base_url", "")
+            or "https://api.deepseek.com",
+            api_key=getattr(settings, "llm_api_key", ""),
+            model=settings.llm_model, **kw)
+
+    def _ollama(settings, **kw):
+        return OllamaClient(base_url=settings.llm_base_url,
+                            model=settings.llm_model, **kw)
+
+    def _mock(settings, **kw):
+        return MockLLMClient(
+            scenario=os.environ.get("LLM_MOCK_SCENARIO", "valid_high"), **kw)
+
+    for name, factory, cls, wrap in (
+            ("openai", _openai, OpenAIClient, True),
+            ("anthropic", _anthropic, AnthropicClient, True),
+            ("vllm", _vllm, VLLMClient, True),
+            ("deepseek", _deepseek, DeepSeekClient, True),
+            ("ollama", _ollama, OllamaClient, True),
+            # mock 是测试替身：脚本化场景 + 测试直接注入属性，不套包装
+            ("mock", _mock, MockLLMClient, False)):
+        REGISTRY.register(ProviderSpec(
+            kind="llm", name=name, factory=factory,
+            capabilities=cls.CAPABILITIES, wrap=wrap,
+            display=cls.__name__))
+
+
+_register_llm_providers()
+
+
 def get_llm_client(settings=None) -> LLMClient:
-    """env/settings 切换 provider（LJ-01 集成冒烟：改环境变量即生效）。"""
+    """env/settings 切换 provider（LJ-01 集成冒烟：改环境变量即生效）。
+
+    issue #76：工厂不再 if-elif 分发——查注册表拿 spec（含能力声明与
+    是否包装），真实 provider 一律套统一包装层。
+    """
     if settings is None:
         from backend.core.config import get_settings
 
         settings = get_settings()
     provider = settings.llm_provider
-    if provider == "openai":
-        return OpenAIClient(
-            base_url=getattr(settings, "llm_base_url", "") or "https://api.openai.com/v1",
-            api_key=getattr(settings, "llm_api_key", ""),
-            model=settings.llm_model)
-    if provider == "anthropic":
-        return AnthropicClient(
-            base_url=getattr(settings, "llm_base_url", "")
-            or "https://api.anthropic.com",
-            api_key=getattr(settings, "llm_api_key", ""),
-            model=settings.llm_model)
-    if provider == "vllm":
-        return VLLMClient(
-            base_url=settings.llm_base_url,
-            api_key=getattr(settings, "llm_api_key", "") or "EMPTY",
-            model=settings.llm_model)
-    if provider == "deepseek":
-        return DeepSeekClient(
-            base_url=getattr(settings, "llm_base_url", "")
-            or "https://api.deepseek.com",
-            api_key=getattr(settings, "llm_api_key", ""),
-            model=settings.llm_model)
-    if provider == "ollama":
-        return OllamaClient(base_url=settings.llm_base_url, model=settings.llm_model)
-    if provider == "mock":
-        return MockLLMClient(
-            scenario=os.environ.get("LLM_MOCK_SCENARIO", "valid_high"))
-    raise ValueError(f"unknown LLM_PROVIDER: {provider!r}")
+    spec = REGISTRY.get("llm", provider)
+    inner = spec.factory(settings=settings)
+    if not spec.wrap:
+        return inner
+    metrics = ProviderMetrics(provider=provider, model=settings.llm_model,
+                              kind="llm")
+    return wrap_llm_client(
+        inner, capabilities=spec.capabilities,
+        gate=gate_for(f"llm:{provider}:{settings.llm_model}",
+                      getattr(settings, "llm_max_concurrency", 4),
+                      getattr(settings, "llm_concurrency_policy", "wait")),
+        retry=RetryPolicy(
+            max_retries=getattr(settings, "llm_max_retries", 2),
+            base_delay=getattr(settings, "llm_retry_base_delay", 0.5)),
+        metrics=metrics)
