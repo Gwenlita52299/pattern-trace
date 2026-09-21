@@ -48,6 +48,21 @@ class Settings(BaseSettings):
     # pydantic-settings 优先级是环境变量 > .env 文件——本地 .env 与
     # docker compose 透传的环境变量两条路都能到这里，providers 不再各自读 os.environ
     llm_api_key: str = ""
+    # issue #76：provider 统一包装（并发闸门/重试/计量）
+    # 并发闸门是**进程级共享**的（每次分析都会新建 client，实例级 Semaphore
+    # 无法限制对上游的总并发）。policy=fail_fast 时超额立即抛 rate_limited，
+    # 不排队——用于上游配额紧张、宁可快速失败也不要堆积的场景。
+    llm_max_concurrency: int = 4
+    llm_concurrency_policy: str = "wait"   # wait | fail_fast
+    # 重试已下沉到包装层（指数退避 + jitter，只重试 timeout/rate_limited/
+    # unavailable）；编排层的整轮重试因此降为 1 次，避免 3×3=9 次叠加
+    llm_max_retries: int = 2
+    llm_retry_base_delay: float = 0.5
+    llm_orchestration_attempts: int = 1
+    embedding_max_concurrency: int = 2
+    embedding_concurrency_policy: str = "wait"
+    embedding_max_retries: int = 2
+    provider_health_timeout_seconds: float = 10.0
     cookie_secure: bool = False         # SEC-02：生产强制 Secure；本地 dev 豁免
     # CORS 显式白名单（CSV）。allow_credentials=True 时禁止 "*"（backend-api-spec），
     # 默认放行本地前端；生产经 CORS_ORIGINS 注入正式域名
