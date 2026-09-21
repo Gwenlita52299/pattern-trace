@@ -253,10 +253,19 @@ def _render_pdf(case: Case, case_id: str, entries: list[dict]) -> bytes:
     return bytes(pdf.output())
 
 
+def _is_cancelled(session, report_id: str) -> bool:
+    """issue #74：取消的事实源（列查询绕开 identity map 缓存）。"""
+    status = session.execute(
+        select(Report.status).where(Report.id == report_id)
+    ).scalar_one_or_none()
+    return status == "cancelled"
+
+
 def generate_report(report_id: str) -> str:
     """同步执行渲染并落盘；由 API 进程后台任务或 worker 调用。
 
-    返回最终状态（completed/failed/skipped）。
+    issue #74：状态机为 queued → processing → completed/failed/cancelled。
+    返回最终状态（completed/failed/cancelled/skipped）。
     """
     from sqlalchemy.orm import Session
 
@@ -265,8 +274,21 @@ def generate_report(report_id: str) -> str:
     engine = get_db_engine()
     with Session(engine) as session:
         report = session.get(Report, report_id)
-        if report is None or report.status != "processing":
+        if report is None or report.status not in ("queued", "processing"):
             return "skipped"
+        if report.status == "queued":
+            # issue #74：queued → processing 抢占（乐观守卫）——重复投递/重放
+            # 消息撞上已在执行的行时只有一方 claim 成功
+            claimed = session.execute(
+                update(Report)
+                .where(Report.id == report_id, Report.status == "queued")
+                .values(status="processing"))
+            session.commit()
+            if claimed.rowcount == 0:
+                return "skipped"
+        if _is_cancelled(session, report_id):
+            print(f"[report_service] report {report_id} cancelled; aborting")
+            return "cancelled"
         case = session.get(Case, report.case_id)
 
         def _fail(code: str, message: str) -> None:

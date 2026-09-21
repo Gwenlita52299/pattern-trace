@@ -24,10 +24,11 @@ import time
 from datetime import UTC, datetime
 
 import anyio
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from ..core.config import get_settings
 from ..core.providers import ProviderError, ProviderErrorCode
+from .task_governance import is_transient
 from ..graph_builder.builder import GraphBuilder
 from ..graph_builder.data_source import build_provider
 from ..llm_judge.judge import (
@@ -173,8 +174,15 @@ def _label_sets(session) -> set[str]:
     return set(session.execute(select(CoinjoinTxid.txid)).scalars().all())
 
 
-async def run_analysis(judgment_id: str, session=None) -> str | None:
-    """执行完整分析管线；返回最终状态名（completed/failed/skipped）。"""
+async def run_analysis(judgment_id: str, session=None, *,
+                        attempt: int = 1) -> str | None:
+    """执行完整分析管线；返回最终状态名。
+
+    issue #74：新增状态 `retrying` —— 瞬时错误（provider 超时/限流/上游
+    不可用）且未达 task_max_tries 时，业务行回落 queued 并交由任务壳层
+    退避重试；`attempt` 由 worker 壳层从 arq job_try 传入。
+    返回 completed / failed / retrying / cancelled / skipped。
+    """
     own_session = session is None
     engine = _engine() if own_session else None
     try:
@@ -216,16 +224,18 @@ async def run_analysis(judgment_id: str, session=None) -> str | None:
         except ProviderFailure as exc:
             attempts = getattr(settings, "llm_orchestration_attempts",
                                PROVIDER_ATTEMPTS)
-            _mark_failed(session, judgment_id, exc.code,
-                         f"provider failure after {attempts} attempt(s)")
-            return "failed"
+            return _finalize_failure(
+                session, judgment_id, exc.code,
+                f"provider failure after {attempts} attempt(s)",
+                attempt=attempt, settings=settings)
         except DataSourceUnavailable as exc:
-            _mark_failed(session, judgment_id, "ESPLORA_UNAVAILABLE", str(exc))
-            return "failed"
+            return _finalize_failure(
+                session, judgment_id, "ESPLORA_UNAVAILABLE", str(exc),
+                attempt=attempt, settings=settings)
         except Exception as exc:  # noqa: BLE001 — 编排层兜底任何管线异常
             code = _provider_error_code(exc) or "TASK_FAILED"
-            _mark_failed(session, judgment_id, code, repr(exc))
-            return "failed"
+            return _finalize_failure(session, judgment_id, code, repr(exc),
+                                     attempt=attempt, settings=settings)
     finally:
         if own_session:
             session.close()
@@ -258,6 +268,10 @@ async def _isolated_sync(live: bool, fn, /, *args, **kwargs):
 
 
 async def _execute(session, row: Judgment, settings, started: float) -> str:
+    # issue #74：协作式取消——排队/刚启动时被取消的任务不进后续耗时阶段
+    if _is_cancelled(session, row.id):
+        print(f"[orchestration] judgment {row.id} cancelled; aborting")
+        return "cancelled"
     provider, _seeds = build_provider(settings)
 
     coinjoin_txids = _label_sets(session)
@@ -293,6 +307,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             f"tx provider failed for every expansion of {row.address}")
 
     canon = subgraphresult_to_canonical(subgraph)
+    if _is_cancelled(session, row.id):  # 建图完成后、检索前
+        return "cancelled"
 
     retriever = Retriever(session, settings)
     # issue #40：阶段 2/4 混合检索 Top-K、3/4 WL kernel 精排由 retriever 内部回调上报
@@ -315,6 +331,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
                   detail=explanation_snapshot(retrieval, settings))
     session.commit()
 
+    if _is_cancelled(session, row.id):  # 进入 LLM 判断前（最耗时阶段）
+        return "cancelled"
     judge = LLMJudge(client=get_llm_client(settings),
                      cache=_judgment_cache(settings))
     # issue #78：per-judgment mock 场景（E2E HTTP 模式经请求字段注入；
@@ -431,6 +449,57 @@ def _mark_failed(session, judgment_id: str, error_code: str,
         return
     _record_event(session, judgment_id, "processing", "failed")
     session.commit()
+
+
+def _finalize_failure(session, judgment_id: str, error_code: str,
+                      error_message: str, *, attempt: int,
+                      settings) -> str:
+    """失败收口（issue #74）：瞬时错误未耗尽 → 回落 queued 等重试；否则终态。
+
+    重试期间把行放回 queued 而不是保持 processing：processing 状态意味着
+    "某个 worker 正在执行"，退避等待期间保持它会让 BE-27 类配额与人工
+    判读都误以为任务在跑。
+    """
+    if is_transient(error_code) and attempt < int(
+            getattr(settings, "task_max_tries", 3)):
+        _release_for_retry(session, judgment_id, error_code, error_message,
+                           attempt)
+        return "retrying"
+    _mark_failed(session, judgment_id, error_code, error_message)
+    return "failed"
+
+
+def _release_for_retry(session, judgment_id: str, error_code: str,
+                       error_message: str, attempt: int) -> None:
+    """把非终态行放回 queued，供任务壳层退避后重新 claim。
+
+    刷新 updated_at 是关键：reclaim_zombies 用 updated_at 判定僵尸，若
+    退避期间不刷新会被误判为 TASK_TIMEOUT 终态（退避上限远小于僵尸阈值，
+    见 config.task_retry_max_delay 注释）。
+    """
+    result = session.execute(
+        update(Judgment)
+        .where(Judgment.id == judgment_id,
+               Judgment.status.in_(("queued", "processing")))
+        .values(status="queued", error_code=error_code,
+                error_message=error_message[:2000], updated_at=func.now()))
+    if result.rowcount == 0:
+        session.rollback()
+        print(f"[orchestration] judgment {judgment_id} finished elsewhere; "
+              "retry release skipped")
+        return
+    _record_event(session, judgment_id, "processing", "retry_scheduled",
+                  detail={"attempt": attempt, "error_code": error_code,
+                          "message": error_message[:200]})
+    session.commit()
+
+
+def _is_cancelled(session, judgment_id: str) -> bool:
+    """issue #74：协作式取消的事实源（列查询不走 identity map 缓存）。"""
+    status = session.execute(
+        select(Judgment.status).where(Judgment.id == judgment_id)
+    ).scalar_one_or_none()
+    return status == "cancelled"
 
 
 def reclaim_zombies(session, *, older_than_seconds: int | None = None) -> list[str]:
