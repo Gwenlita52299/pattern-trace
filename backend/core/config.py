@@ -149,6 +149,18 @@ class Settings(BaseSettings):
     demo_seeds: str = ""                 # 匿名白名单地址 CSV；空则用 fixture 内 seed
     zombie_timeout_seconds: int = 120    # 进行中任务超时回收阈值（BE-40）
 
+    # issue #74：任务队列治理。分析与报告拆分为独立队列/独立 worker 进程
+    # （报告渲染可能长时间占用 worker 槽位，不得挤占交互式分析）。
+    queue_required: bool = False         # 生产 true：Redis 不可用拒绝投递，不静默降级
+    queue_analysis_name: str = "q_analysis"
+    queue_report_name: str = "q_report"
+    # 瞬时错误（provider 超时/限流/上游不可用）退避重试；永久错误直接终态。
+    # 退避上限必须远小于 zombie_timeout_seconds，否则重试期间的 queued 行
+    # 会被僵尸回收器误判为 TASK_TIMEOUT 终态
+    task_max_tries: int = 3
+    task_retry_base_delay: float = 5.0
+    task_retry_max_delay: float = 30.0
+
     @property
     def demo_seeds_list(self) -> list[str]:
         return [a.strip() for a in self.demo_seeds.split(",") if a.strip()]

@@ -91,21 +91,48 @@ class CaseAddress(Base):
 
 
 class Report(Base):
-    """异步报告导出任务（backend-api-spec §4 reports）。"""
+    """异步报告导出任务（backend-api-spec §4 reports）。
+
+    issue #74：状态机补 queued 排队态（此前投递即 processing，无法区分
+    「已入队」与「worker 正在生成」）：
+    queued → processing → completed / failed / cancelled
+    """
     __tablename__ = "reports"
 
     id = Column(String(36), primary_key=True, default=_uuid)
     case_id = Column(String(36), ForeignKey("cases.id", ondelete="CASCADE"),
                      nullable=False, index=True)
     format = Column(String(10), nullable=False)  # pdf | html
-    status = Column(String(20), default="processing", nullable=False,
-                    index=True)  # processing | completed | failed
+    status = Column(String(20), default="queued", nullable=False,
+                    index=True)  # queued | processing | completed | failed | cancelled
     storage_key = Column(String(200))
     error_code = Column(String(50))
     error_message = Column(Text)
     created_by = Column(String(36))
     completed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class TaskDeadLetter(Base):
+    """任务死信（issue #74）：重试耗尽或永久错误的任务档案。
+
+    只读治理用：保留任务类型、业务 ID、尝试次数、最后错误与失败时间，
+    支持管理员查看与重新入队。业务对象的失败状态由各自的终态写入维护，
+    本表是「为什么失败、试了几次」的可追溯记录（不参与状态机判定）。
+    """
+    __tablename__ = "task_dead_letters"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_type = Column(String(20), nullable=False, index=True)   # analysis | report
+    business_id = Column(String(64), nullable=False, index=True)
+    queue = Column(String(64))
+    attempts = Column(Integer, nullable=False, default=1)
+    error_code = Column(String(50))
+    last_error = Column(Text)
+    failed_at = Column(DateTime(timezone=True), server_default=func.now(),
+                       nullable=False, index=True)
+    requeued_at = Column(DateTime(timezone=True))
+    requeued_by = Column(String(36))
 
 
 class AuditLog(Base):
@@ -145,7 +172,9 @@ class JudgmentEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
-TERMINAL_STATUSES = {"completed", "failed"}
+JUDGMENT_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+# issue #74：报告与判断共用终态集合（取消也是终态，不可再迁移）
+TERMINAL_STATUSES = JUDGMENT_TERMINAL_STATUSES
 
 
 class InvalidStateTransition(RuntimeError):
