@@ -9,6 +9,7 @@ export interface ApiRoute {
 export const API_ROUTES: readonly ApiRoute[] = [
   { path: '/api/v1/addresses/analyze', methods: ["POST"] },
   { path: '/api/v1/addresses/{address}/subgraph', methods: ["GET"] },
+  { path: '/api/v1/admin/providers/health', methods: ["GET"] },
   { path: '/api/v1/audit-logs', methods: ["GET"] },
   { path: '/api/v1/auth/login', methods: ["POST"] },
   { path: '/api/v1/auth/logout', methods: ["POST"] },

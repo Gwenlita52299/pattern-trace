@@ -164,9 +164,15 @@ class TestLJ01ProviderAbstraction:
             llm_model="qwen3")), VLLMClient)
 
     def test_unknown_provider_rejected(self):
-        with pytest.raises(ValueError, match="unknown LLM_PROVIDER"):
+        """issue #76：未知 provider 归入统一分类 configuration（此前裸 ValueError）。"""
+        from backend.core.providers import ProviderError, ProviderErrorCode
+
+        with pytest.raises(ProviderError) as excinfo:
             get_llm_client(SimpleNamespace(llm_provider="skynet",
                                            llm_base_url="", llm_model="x"))
+        assert excinfo.value.code is ProviderErrorCode.CONFIGURATION
+        assert "skynet" in str(excinfo.value)
+        assert "registered" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
