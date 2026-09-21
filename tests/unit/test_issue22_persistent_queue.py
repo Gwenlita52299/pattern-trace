@@ -128,7 +128,9 @@ class TestDispatchPaths:
                    for name, args, _kw in pool.calls)
         try:
             with Session(get_db_engine()) as session:
-                assert session.get(_report_model(), rid).status == "processing"
+                # issue #74：投递即 queued（此前创建行直接落 processing），
+                # worker claim 后才转 processing，用于区分「已入队/正在生成」
+                assert session.get(_report_model(), rid).status == "queued"
         finally:
             with Session(get_db_engine()) as session:
                 session.execute(delete(_report_model())
@@ -227,7 +229,7 @@ class TestJobContracts:
     def test_run_analysis_job_contract(self, monkeypatch):
         from workers.worker import run_analysis
 
-        async def fake_run(judgment_id):
+        async def fake_run(judgment_id, attempt=1):
             return "completed"
 
         monkeypatch.setattr(

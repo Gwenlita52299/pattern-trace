@@ -228,10 +228,17 @@ class TestStagePipelineE2E:
 
     def test_failed_at_building_stage_is_attributed(
             self, api_client, monkeypatch, fake_redis):
-        """反例：子图构建阶段失败 → 失败标在 building_subgraph。"""
+        """反例：子图构建阶段失败 → 失败标在 building_subgraph。
+
+        issue #74：ESPLORA_UNAVAILABLE 属瞬时错误，默认会退避重试若干次；
+        本用例验证的是阶段归因，故把尝试上限钉为 1（一次失败即终态）。
+        """
         from backend.api.app import create_app
+        from backend.core.config import reset_settings
         from backend.services.orchestration import DataSourceUnavailable
 
+        monkeypatch.setenv("TASK_MAX_TRIES", "1")
+        reset_settings()
         _clear_judgments()
 
         class BoomBuilder:

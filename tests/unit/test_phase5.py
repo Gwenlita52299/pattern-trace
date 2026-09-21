@@ -437,9 +437,12 @@ class TestReliabilitySemantics:
         ("rate_limited", "LLM_PROVIDER_RATE_LIMITED"),
     ])
     def test_rel03_provider_failure_taxonomy(self, scenario, expected_code):
+        """issue #74：瞬时错误先回落 queued 等退避重试（不立即终结），
+        重试耗尽（attempt 达 task_max_tries）才进 failed 终态。"""
         import asyncio
         import os
 
+        from backend.models.base import Judgment
         from backend.services.orchestration import run_analysis
 
         os.environ["LLM_MOCK_SCENARIO"] = scenario
@@ -447,13 +450,19 @@ class TestReliabilitySemantics:
         try:
             jid = self._enqueue(_demo_seed())
             result = asyncio.run(run_analysis(jid))
-            assert result == "failed"
-
-            from backend.models.base import Judgment
+            assert result == "retrying"
 
             with Session(get_db_engine()) as session:
                 row = session.get(Judgment, jid)
-            assert row.error_code == expected_code, row.error_code
+                assert row.status == "queued", row.status
+                assert row.error_code == expected_code, row.error_code
+
+            result = asyncio.run(run_analysis(jid, attempt=3))
+            assert result == "failed"
+            with Session(get_db_engine()) as session:
+                row = session.get(Judgment, jid)
+                assert row.status == "failed"
+                assert row.error_code == expected_code, row.error_code
         finally:
             os.environ.pop("LLM_MOCK_SCENARIO", None)
 
@@ -473,10 +482,19 @@ class TestReliabilitySemantics:
         _clear_judgments()
         addr = encode_bech32m_address(b"rel05-unreachable-seed"[:20])
         jid = self._enqueue(addr)
+        # issue #74：ESPLORA_UNAVAILABLE 是瞬时错误 → 先回落 queued 重试
         result = asyncio.run(orch.run_analysis(jid))
+        assert result == "retrying"
+        with Session(get_db_engine()) as session:
+            row = session.get(Judgment, jid)
+            assert row.status == "queued"
+            assert row.error_code == "ESPLORA_UNAVAILABLE"
+        # 重试耗尽 → 终态
+        result = asyncio.run(orch.run_analysis(jid, attempt=3))
         assert result == "failed"
         with Session(get_db_engine()) as session:
             row = session.get(Judgment, jid)
+        assert row.status == "failed"
         assert row.error_code == "ESPLORA_UNAVAILABLE"
 
     def test_cm03_state_transition_events(self, api_client):
