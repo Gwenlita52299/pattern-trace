@@ -1155,6 +1155,23 @@ def create_app() -> FastAPI:
                             filename=f"patterntrace-{report_id}{path.suffix}")
 
     # ---- 用户与审计（admin only）----
+    @app.get("/api/v1/admin/providers/health")
+    async def providers_health(admin: dict = Depends(require_role("admin"))):
+        """issue #76：模型 provider 健康检查（admin）。
+
+        区分配置错误 / 认证失败 / 限流 / 上游不可用——四种情况的处置完全不同
+        （改配置 / 换 key / 等配额 / 排查网络）。检查用未包装的 raw client，
+        不污染计量、不触发重试；响应只含 provider/model/状态/错误码/耗时，
+        绝不含 API Key、Authorization 或请求载荷。
+        """
+        from ..core.providers.health import check_all
+
+        results = await check_all(get_settings())
+        return {
+            "providers": [h.to_dict() for h in results],
+            "ok": all(h.status == "ok" for h in results),
+        }
+
     @app.post("/api/v1/users", status_code=201)
     def create_user(body: UserCreateRequest,
                     admin: dict = Depends(require_role("admin"))):

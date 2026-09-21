@@ -9,6 +9,9 @@
 - LLM_VALIDATION_FAILED     重试耗尽仍产出非法引用（retry_count=MAX_RETRIES-1）
 - LLM_PROVIDER_TIMEOUT      provider 超时（退避重试后仍失败，REL-03）
 - LLM_PROVIDER_RATE_LIMITED provider 429（同上）
+- LLM_PROVIDER_AUTH_FAILED  provider 401/403（issue #76：此前与通用错误混为一谈）
+- LLM_PROVIDER_INVALID_RESPONSE provider 响应畸形（同上）
+- EMBEDDING_*               检索阶段 embedding provider 故障（issue #76）
 - ESPLORA_UNAVAILABLE       图数据源完全不可用（REL-05）
 - TASK_TIMEOUT              僵尸回收（BE-40）
 - TASK_FAILED               其余未预期异常
@@ -24,6 +27,7 @@ import anyio
 from sqlalchemy import select, update
 
 from ..core.config import get_settings
+from ..core.providers import ProviderError, ProviderErrorCode
 from ..graph_builder.builder import GraphBuilder
 from ..graph_builder.data_source import build_provider
 from ..llm_judge.judge import (
@@ -94,8 +98,33 @@ def _report_stage(judgment_id: str, stage: str, settings) -> None:
         pass
 
 
+_LLM_ERROR_CODES = {
+    ProviderErrorCode.TIMEOUT: "LLM_PROVIDER_TIMEOUT",
+    ProviderErrorCode.RATE_LIMITED: "LLM_PROVIDER_RATE_LIMITED",
+    ProviderErrorCode.AUTH_FAILED: "LLM_PROVIDER_AUTH_FAILED",
+    ProviderErrorCode.INVALID_RESPONSE: "LLM_PROVIDER_INVALID_RESPONSE",
+}
+_EMBEDDING_ERROR_CODES = {
+    ProviderErrorCode.TIMEOUT: "EMBEDDING_TIMEOUT",
+    ProviderErrorCode.RATE_LIMITED: "EMBEDDING_RATE_LIMITED",
+    ProviderErrorCode.AUTH_FAILED: "EMBEDDING_AUTH_FAILED",
+    ProviderErrorCode.INVALID_RESPONSE: "EMBEDDING_INVALID_RESPONSE",
+}
+
+
 def _provider_error_code(exc: BaseException) -> str | None:
-    """把 provider 层异常映射为明确 error_code；非 provider 异常返回 None。"""
+    """把 provider 层异常映射为明确 error_code；非 provider 异常返回 None。
+
+    issue #76：优先认统一分类（ProviderError）——按 kind 选前缀，未知码
+    退化为 *PROVIDER_ERROR；httpx 异常分支保留用于未包装路径（mock 场景、
+    历史调用方）。
+    """
+    if isinstance(exc, ProviderError):
+        table = (_EMBEDDING_ERROR_CODES if exc.kind == "embedding"
+                 else _LLM_ERROR_CODES)
+        default = ("EMBEDDING_ERROR" if exc.kind == "embedding"
+                   else "LLM_PROVIDER_ERROR")
+        return table.get(exc.code, default)
     try:
         import httpx
     except ImportError:  # pragma: no cover — httpx 是 fastapi 必然依赖
@@ -111,7 +140,10 @@ def _provider_error_code(exc: BaseException) -> str | None:
     return None
 
 
-PROVIDER_ATTEMPTS = 3  # REL-03：超时/限流先退避重试再进终态
+# issue #76：指数退避重试已下沉到 provider 包装层，编排层的整轮重试因此
+# 默认关闭（否则 3×3 叠加成 9 次调用）。保留循环是为兼容需要整体重跑的
+# 定制场景（如更换 prompt 后重试），经 llm_orchestration_attempts 配置。
+PROVIDER_ATTEMPTS = 1
 
 
 def _engine():
@@ -182,9 +214,10 @@ async def run_analysis(judgment_id: str, session=None) -> str | None:
                          str(exc), retry_count=MAX_RETRIES - 1)
             return "failed"
         except ProviderFailure as exc:
+            attempts = getattr(settings, "llm_orchestration_attempts",
+                               PROVIDER_ATTEMPTS)
             _mark_failed(session, judgment_id, exc.code,
-                         f"provider failure after "
-                         f"{PROVIDER_ATTEMPTS} attempts")
+                         f"provider failure after {attempts} attempt(s)")
             return "failed"
         except DataSourceUnavailable as exc:
             _mark_failed(session, judgment_id, "ESPLORA_UNAVAILABLE", str(exc))
@@ -263,8 +296,13 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
 
     retriever = Retriever(session, settings)
     # issue #40：阶段 2/4 混合检索 Top-K、3/4 WL kernel 精排由 retriever 内部回调上报
-    retrieval = retriever.retrieve(
-        canon, notify=lambda stage: (
+    # issue #76：openai_compat 的 embedding 是同步 HTTP，检索路径直接同步调用
+    # 会阻塞 worker 事件循环——与图构建同样隔离到线程池；stub 无网络，
+    # 保持同步以免破坏既有 CI 时序（fixture/demo 全走 stub）
+    retrieval = await _isolated_sync(
+        settings.embedding_provider != "stub",
+        retriever.retrieve, canon,
+        notify=lambda stage: (
             _report_stage(row.id, stage, settings),
             _record_stage(session, row.id, stage)))
 
@@ -291,7 +329,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     # issue #8：图不完整时把数据质量事实传给 LLM（谨慎判断、说明局限）
     graph_degraded = bool(subgraph.stats.degraded)
     missing_branches = int(subgraph.stats.missing_branches)
-    for attempt in range(PROVIDER_ATTEMPTS):
+    for attempt in range(getattr(settings, "llm_orchestration_attempts",
+                                PROVIDER_ATTEMPTS)):
         try:
             verdict = await judge.judge(
                 address=row.address, subgraph=canon,
@@ -309,6 +348,13 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
             await asyncio.sleep(0.05 * (attempt + 1))  # 退避后重试（REL-03）
     if verdict is None:
         raise ProviderFailure(provider_code or "LLM_PROVIDER_ERROR")
+
+    # issue #76：provider 计量（调用/失败/重试/耗时/usage）落 judgment_events，
+    # 使模型成本与失败可归因到单次分析；快照不含任何密钥或请求载荷
+    judge_metrics = getattr(judge.client, "metrics", None)
+    if judge_metrics is not None:
+        _record_event(session, row.id, None, "stage:llm_usage",
+                      detail=judge_metrics.snapshot())
 
     # issue #26：id 与 name 必须从同一候选对象派生。校验层已保证
     # verdict.matched_pattern ∈ 候选名称或为 null，此处 name 取候选对象
