@@ -45,6 +45,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
       - REDIS_URL=redis://redis:6379/1
+      - ARQ_QUEUE_ANALYSIS=q_analysis
+      - ARQ_MAX_JOBS=2
       - LLM_PROVIDER=mock
       - LLM_MODEL=mock-demo-model
       - GRAPH_DATA_MODE=fixture
@@ -62,6 +64,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
       - REDIS_URL=redis://redis:6379/1
+      - ARQ_QUEUE_ANALYSIS=q_analysis
+      - ARQ_MAX_JOBS=2
       - LLM_PROVIDER=mock
       - LLM_MODEL=mock-demo-model
       - GRAPH_DATA_MODE=fixture
@@ -71,6 +75,17 @@ services:
       # E2E 固定 ego 查表/hybrid 协议：在线前向（torch）加载+推理拖慢
       # fixture 闭环且不确定性高；live 生产由部署 env 控制 auto
       - GRAPHORMER_QUERY_MODE=off
+      - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - REPORTS_DIR=/app/output/reports
+
+  # issue #74：报告 worker 同样隔离到 e2e 库/Redis DB1，否则会连开发库
+  worker-report:
+    ports: []
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
+      - REDIS_URL=redis://redis:6379/1
+      - ARQ_QUEUE_REPORT=q_report
+      - ARQ_REPORT_MAX_JOBS=1
       - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       - REPORTS_DIR=/app/output/reports
 

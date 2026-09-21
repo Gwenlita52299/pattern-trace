@@ -276,6 +276,23 @@ def _demo_seeds(settings) -> list[str]:
 
 
 # ---- 审计日志（阶段5 · CM-10 / BE-07/32）----
+def _dead_letter_payload(row) -> dict:
+    """issue #74：死信序列化（不含内部 ORM 细节）。"""
+    return {
+        "id": row.id,
+        "task_type": row.task_type,
+        "business_id": row.business_id,
+        "queue": row.queue,
+        "attempts": row.attempts,
+        "error_code": row.error_code,
+        "last_error": row.last_error,
+        "failed_at": row.failed_at.isoformat() if row.failed_at else None,
+        "requeued_at": (row.requeued_at.isoformat()
+                        if row.requeued_at else None),
+        "requeued_by": row.requeued_by,
+    }
+
+
 def _audit_action(method: str, path: str) -> tuple[str, str | None] | None:
     """返回 (action, resource_id)；非业务写路径返回 None 不记录。"""
     if path.startswith("/api/v1/auth/login"):
@@ -671,7 +688,7 @@ def create_app() -> FastAPI:
 
         from ..models.base import Judgment
         from ..services.orchestration import reclaim_zombies
-        from ..services.task_queue import dispatch_analysis
+        from ..services.task_queue import QueueUnavailable, dispatch_analysis
 
         # issue #79：高活跃地址预检（单次 /address/:addr/stats 请求）——
         # 建图前拦截，避免高活跃地址进入 BFS 后产生数万次 Esplora 请求
@@ -711,8 +728,14 @@ def create_app() -> FastAPI:
             jid, created = existing.id, False
 
         # issue #22：经 Arq 持久化队列投递，API 重启不再丢失排队中的任务；
-        # Redis 不可达时 task_queue 内部降级为进程内任务（单实例部署形态）
-        await dispatch_analysis(jid)
+        # Redis 不可达时 task_queue 内部降级为进程内任务（单实例部署形态）；
+        # issue #74：QUEUE_REQUIRED=true 时拒绝降级并显式 503
+        try:
+            await dispatch_analysis(jid)
+        except QueueUnavailable as exc:
+            raise ProblemError(
+                503, str(exc), "QUEUE_UNAVAILABLE",
+                headers={"Retry-After": "30"}) from exc
 
         status_now = "queued"
         if not created:
@@ -1073,7 +1096,7 @@ def create_app() -> FastAPI:
         format: str = Query(default="pdf", pattern="^(pdf|html)$"),
         user: dict = Depends(require_role("investigator", "admin")),
     ):
-        from ..services.task_queue import dispatch_report
+        from ..services.task_queue import QueueUnavailable, dispatch_report
 
         rid = str(uuid.uuid4())
         with Session(get_db_engine()) as session:
@@ -1081,20 +1104,26 @@ def create_app() -> FastAPI:
             pending = session.execute(
                 select(func.count(Report.id))
                 .where(Report.created_by == str(user["id"]),
-                       Report.status == "processing")).scalar_one()
-            if pending >= 2:  # BE-27：单用户并发报告 ≤ 2
+                       Report.status.in_(("queued", "processing")))).scalar_one()
+            if pending >= 2:  # BE-27：单用户并发报告 ≤ 2（排队中也占额度）
                 raise ProblemError(
                     429, "concurrent report limit (2) reached",
                     "REPORT_CONCURRENCY_LIMIT",
                     headers={"Retry-After": "30"})
             session.add(Report(id=rid, case_id=case_id, format=format,
+                               status="queued",  # issue #74：排队态
                                created_by=str(user["id"])))
             session.commit()
 
         # issue #22：报告经持久化队列由 worker 渲染，文件写入共享存储卷，
-        # 多实例/容器替换后仍可下载
-        await dispatch_report(rid)
-        return {"report_id": rid, "status": "processing",
+        # 多实例/容器替换后仍可下载；issue #74：QUEUE_REQUIRED 下拒绝降级
+        try:
+            await dispatch_report(rid)
+        except QueueUnavailable as exc:
+            raise ProblemError(
+                503, str(exc), "QUEUE_UNAVAILABLE",
+                headers={"Retry-After": "30"}) from exc
+        return {"report_id": rid, "status": "queued",
                 "poll_url": f"/api/v1/reports/{rid}"}
 
     @app.get("/api/v1/reports/{report_id}")
@@ -1171,6 +1200,102 @@ def create_app() -> FastAPI:
             "providers": [h.to_dict() for h in results],
             "ok": all(h.status == "ok" for h in results),
         }
+
+    @app.get("/api/v1/admin/queues")
+    async def queue_status_endpoint(
+            admin: dict = Depends(require_role("admin"))):
+        """issue #74：队列运行状态（pending/active/retry + 最老等待 + 死信）。
+
+        只读观测；Redis 不可用时返回 redis_available=false 而非报错——
+        观测接口本身不应因被观测对象故障而不可用。
+        """
+        from ..services.task_governance import collect_queue_status
+
+        with Session(get_db_engine()) as session:
+            return await collect_queue_status(session)
+
+    @app.get("/api/v1/admin/dead-letters")
+    def list_dead_letters_endpoint(
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+        task_type: str | None = Query(default=None,
+                                      pattern="^(analysis|report)$"),
+        include_requeued: bool = Query(default=False),
+        admin: dict = Depends(require_role("admin")),
+    ):
+        """issue #74：死信列表（默认只看未重跑的）。"""
+        from ..services.task_governance import list_dead_letters
+
+        with Session(get_db_engine()) as session:
+            rows, total = list_dead_letters(
+                session, page=page, page_size=page_size, task_type=task_type,
+                unresolved_only=not include_requeued)
+            items = [_dead_letter_payload(r) for r in rows]
+        return {"items": items, "total": total, "page": page,
+                "page_size": page_size}
+
+    @app.post("/api/v1/admin/dead-letters/{dead_letter_id}/requeue")
+    async def requeue_dead_letter_endpoint(
+        dead_letter_id: int,
+        admin: dict = Depends(require_role("admin")),
+    ):
+        """issue #74：重跑死信任务（仅失败态业务对象可复活）。"""
+        from ..models.base import TaskDeadLetter
+        from ..services.task_governance import prepare_requeue
+        from ..services.task_queue import dispatch_analysis, dispatch_report
+
+        actor = str(admin.get("email") or admin.get("id"))
+        with Session(get_db_engine()) as session:
+            row = session.get(TaskDeadLetter, dead_letter_id)
+            if row is None:
+                raise ProblemError(404, "dead letter not found", "NOT_FOUND")
+            attempt = prepare_requeue(session, row, actor=actor)
+            if attempt == 0:
+                raise ProblemError(
+                    409, "business object is not in failed state",
+                    "NOT_REQUEUEABLE")
+            task_type, business_id = row.task_type, row.business_id
+        if task_type == "analysis":
+            await dispatch_analysis(business_id, attempt=attempt)
+        else:
+            await dispatch_report(business_id, attempt=attempt)
+        return {"dead_letter_id": dead_letter_id, "task_type": task_type,
+                "business_id": business_id, "status": "queued",
+                "attempt": attempt}
+
+    @app.post("/api/v1/admin/judgments/{judgment_id}/cancel")
+    def cancel_judgment_endpoint(
+        judgment_id: str, admin: dict = Depends(require_role("admin"))):
+        """issue #74：取消排队/执行中的分析（终态不可取消）。"""
+        from ..services.task_governance import cancel_task
+
+        actor = str(admin.get("email") or admin.get("id"))
+        with Session(get_db_engine()) as session:
+            outcome = cancel_task(session, task_type="analysis",
+                                  business_id=judgment_id, actor=actor)
+        if outcome == "not_found":
+            raise ProblemError(404, "judgment not found", "NOT_FOUND")
+        if outcome == "not_cancellable":
+            raise ProblemError(409, "judgment is not cancellable",
+                               "NOT_CANCELLABLE")
+        return {"judgment_id": judgment_id, "status": "cancelled"}
+
+    @app.post("/api/v1/admin/reports/{report_id}/cancel")
+    def cancel_report_endpoint(
+        report_id: str, admin: dict = Depends(require_role("admin"))):
+        """issue #74：取消排队/生成中的报告。"""
+        from ..services.task_governance import cancel_task
+
+        actor = str(admin.get("email") or admin.get("id"))
+        with Session(get_db_engine()) as session:
+            outcome = cancel_task(session, task_type="report",
+                                  business_id=report_id, actor=actor)
+        if outcome == "not_found":
+            raise ProblemError(404, "report not found", "NOT_FOUND")
+        if outcome == "not_cancellable":
+            raise ProblemError(409, "report is not cancellable",
+                               "NOT_CANCELLABLE")
+        return {"report_id": report_id, "status": "cancelled"}
 
     @app.post("/api/v1/users", status_code=201)
     def create_user(body: UserCreateRequest,
