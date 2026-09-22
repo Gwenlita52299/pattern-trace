@@ -135,6 +135,39 @@ class TaskDeadLetter(Base):
     requeued_by = Column(String(36))
 
 
+class AnalysisSpan(Base):
+    """分析阶段 span（issue #73）：持久化 trace 的事实源。
+
+    每个阶段一行，以 judgment_id 为 trace 根（parent_id 指向根 span）。
+    Redis 只存「当前阶段」（TTL 1h、会被后续阶段覆盖），本表回答
+    「每阶段耗时多久、处理了多少数据、调用了几次 provider、失败在哪个
+    子步骤」——且 Redis 过期后仍可追溯。
+
+    metadata 只放非敏感聚合值（计数/耗时/版本号）；request/response 载荷、
+    prompt、思维链、Authorization 等一律不落库（见 services/tracing.py 的
+    白名单收口）。ORM 属性名 span_metadata 对应 DB 列 metadata
+    （DeclarativeBase 已占用 metadata 这个名字）。
+    """
+    __tablename__ = "analysis_spans"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    judgment_id = Column(String(36),
+                         ForeignKey("judgments.id", ondelete="CASCADE"),
+                         nullable=False, index=True)
+    trace_id = Column(String(64), index=True)
+    parent_id = Column(BigInteger)      # 根 span 为空；阶段 span 指向 analysis
+    name = Column(String(50), nullable=False, index=True)
+    # running | completed | failed | skipped | retrying | cancelled
+    status = Column(String(20), nullable=False)
+    attempt = Column(Integer, default=1, nullable=False)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        nullable=False)
+    finished_at = Column(DateTime(timezone=True))
+    duration_ms = Column(Integer)
+    error_code = Column(String(50))
+    span_metadata = Column("metadata", JSONB)
+
+
 class AuditLog(Base):
     """审计日志（spec §4 完整字段，BE-07/32；CM-10 按 request_id 串联）。"""
     __tablename__ = "audit_logs"
@@ -246,6 +279,10 @@ class Judgment(Base):
     # issue #78：mock provider 的 per-judgment 场景（E2E HTTP 模式的
     # worker 故障注入通道；仅 LLM_PROVIDER=mock 时经 API 写入）
     mock_scenario = Column(String(100))
+
+    # issue #73：HTTP 请求入口生成的 trace 标识，随任务传递到 worker，
+    # 贯穿该次分析的全部 analysis_spans（验收：trace ID 跨异步边界）
+    trace_id = Column(String(64), index=True)
 
     created_by = Column(String(36), ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())

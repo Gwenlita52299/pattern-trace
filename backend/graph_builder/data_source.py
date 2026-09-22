@@ -234,6 +234,9 @@ class LiveEsploraProvider:
         self.request_budget = request_budget
         self.time_budget_seconds = time_budget_seconds
         self.requests_used = 0
+        # issue #73：缓存命中计数（不占预算，但与 requests 一起构成
+        # 「本次分析向上游发了多少请求、省了多少」的观测口径）
+        self.cache_hits = 0
         self.budget_exhausted = False
         self.budget_exhausted_reason = ""
         self._started_at = time.monotonic()
@@ -361,6 +364,7 @@ class LiveEsploraProvider:
         redis_key = f"esplora:{self.base_url}:{path}"
         cached = self._redis_get(redis_key)
         if cached is not None:
+            self.cache_hits += 1   # issue #73：观测用，不计入请求预算
             return cached
         self.requests_used += 1
         data = self._http_with_fault_tolerance(path)
