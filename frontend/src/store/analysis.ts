@@ -81,6 +81,43 @@ export interface JudgmentPayload {
 const START_INTERVAL_MS = 2_000;
 const MAX_BACKOFF_MS = 5_000;
 
+// issue #73：持久化分析 trace（后端 analysis_spans）——与 Redis 实时阶段
+// 互补：终态后仍可查看每阶段耗时、上游调用计数与稳定错误码
+export interface TraceSpan {
+  id: number;
+  parent_id: number | null;
+  name: string;
+  status: string;
+  attempt: number;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_code: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface TracePayload {
+  judgment_id: string;
+  trace_id: string | null;
+  status: string;
+  error_code: string | null;
+  total_duration_ms: number | null;
+  stage_duration_ms: Record<string, number | null>;
+  spans: TraceSpan[];
+}
+
+// issue #73：span 名 → 展示文案（后端 services/tracing.py 的写入点对齐）
+export const TRACE_SPAN_LABELS: Record<string, string> = {
+  analysis: "整体分析",
+  building_subgraph: "构建子图 BFS",
+  esplora_fetch: "上游数据源请求",
+  retrieval_topk: "混合检索 Top-K",
+  embedding_call: "Embedding 调用",
+  wl_rerank: "WL kernel 精排",
+  llm_judging: "LLM 结构化判断",
+  llm_call: "LLM 调用",
+};
+
 // issue #40：阶段 → 文案；与后端 orchestration._report_stage 的 key 对齐。
 // 顺序即管线阶段，UI（进度条/结果呈现门控）共用
 export const ANALYSIS_STAGES = [
@@ -105,6 +142,10 @@ interface AnalysisState {
   error: string | null;
   highlightIds: Set<string>;
   selectedNodeId: string | null;
+  // issue #73：持久化阶段 trace（可展开详情）
+  trace: TracePayload | null;
+  traceError: string | null;
+  fetchTrace: (id: string) => Promise<void>;
   startAnalysis: (params: {
     address: string;
     hops: number;
@@ -143,6 +184,8 @@ const initial = {
   error: null as string | null,
   highlightIds: new Set<string>(),
   selectedNodeId: null as string | null,
+  trace: null as TracePayload | null,
+  traceError: null as string | null,
 };
 
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
@@ -226,6 +269,16 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   reset() {
     get().cancelPolling();
     set({ ...initial });
+  },
+
+  async fetchTrace(id) {
+    // issue #73：trace 拉取失败不影响主流程（进度条/结论照常展示）
+    try {
+      const trace = await api<TracePayload>(`/judgments/${id}/trace`);
+      set({ trace, traceError: null });
+    } catch (err) {
+      set({ traceError: (err as Error).message || "阶段详情加载失败" });
+    }
   },
 
   setHighlight(ids) {

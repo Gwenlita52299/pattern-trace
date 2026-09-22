@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import ErrorBoundary from '@/components/ErrorBoundary';
 import AnalysisStages from '@/components/AnalysisStages';
+import AnalysisTrace from '@/components/AnalysisTrace';
 import GraphCanvas from '@/components/GraphCanvas';
 import VerdictCard from '@/components/VerdictCard';
 import { ANALYSIS_STAGES, useAnalysisStore, type GraphNode } from '@/store/analysis';
@@ -70,6 +71,8 @@ export default function AnalyzePage() {
     <main className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6">
       {/* 分阶段进度条（issue #40）：横向，横跨子图与右侧栏 */}
       <AnalysisStages />
+      {/* issue #73：可展开的持久化阶段详情（完成/失败后均可查看） */}
+      <AnalysisTrace judgmentId={judgmentId} />
       <div className="flex gap-4">
       <section className="relative h-[calc(100vh-190px)] flex-1 overflow-hidden rounded-xl border border-pt-line bg-[#0c0f13]">
         {subgraph && resultShown ? (
