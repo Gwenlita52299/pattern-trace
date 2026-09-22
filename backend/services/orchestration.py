@@ -29,6 +29,7 @@ from sqlalchemy import func, select, update
 from ..core.config import get_settings
 from ..core.providers import ProviderError, ProviderErrorCode
 from .task_governance import is_transient
+from .tracing import NullRecorder, SpanRecorder
 from ..graph_builder.builder import GraphBuilder
 from ..graph_builder.data_source import build_provider
 from ..llm_judge.judge import (
@@ -215,36 +216,82 @@ async def run_analysis(judgment_id: str, session=None, *,
         session.commit()
 
         started = time.perf_counter()
-        try:
-            return await _execute(session, row, settings, started)
-        except JudgmentValidationError as exc:
-            _mark_failed(session, judgment_id, "LLM_VALIDATION_FAILED",
-                         str(exc), retry_count=MAX_RETRIES - 1)
-            return "failed"
-        except ProviderFailure as exc:
-            attempts = getattr(settings, "llm_orchestration_attempts",
-                               PROVIDER_ATTEMPTS)
-            return _finalize_failure(
-                session, judgment_id, exc.code,
-                f"provider failure after {attempts} attempt(s)",
-                attempt=attempt, settings=settings)
-        except DataSourceUnavailable as exc:
-            return _finalize_failure(
-                session, judgment_id, "ESPLORA_UNAVAILABLE", str(exc),
-                attempt=attempt, settings=settings)
-        except Exception as exc:  # noqa: BLE001 — 编排层兜底任何管线异常
-            code = _provider_error_code(exc) or "TASK_FAILED"
-            return _finalize_failure(session, judgment_id, code, repr(exc),
-                                     attempt=attempt, settings=settings)
+        # issue #73：持久化 trace 根 span——覆盖本次分析的全部阶段，
+        # trace_id 来自 HTTP 入口（见 api.analyze），随任务跨进程传递
+        recorder = SpanRecorder(judgment_id, row.trace_id)
+        with recorder.span("analysis", attempt=attempt, root=True) as root:
+            status, error_code = await _run_pipeline(
+                session, row, settings, started, recorder, attempt)
+            root.set_status(status, error_code=error_code)
+            root.set(attempt=attempt)
+        return status
     finally:
         if own_session:
             session.close()
             engine.dispose()
 
 
+async def _run_pipeline(session, row, settings, started: float,
+                        recorder, attempt: int) -> tuple[str, str | None]:
+    """管线执行 + 失败收口；返回 (最终状态, 稳定错误码)。
+
+    issue #73：错误码同时写进根 span，trace 里能直接看到失败原因，
+    不必再去 judgments 行反查。
+    """
+    judgment_id = row.id
+    try:
+        return await _execute(session, row, settings, started, recorder=recorder,
+                              attempt=attempt), None
+    except JudgmentValidationError as exc:
+        _mark_failed(session, judgment_id, "LLM_VALIDATION_FAILED",
+                     str(exc), retry_count=MAX_RETRIES - 1)
+        return "failed", "LLM_VALIDATION_FAILED"
+    except ProviderFailure as exc:
+        attempts = getattr(settings, "llm_orchestration_attempts",
+                           PROVIDER_ATTEMPTS)
+        status = _finalize_failure(
+            session, judgment_id, exc.code,
+            f"provider failure after {attempts} attempt(s)",
+            attempt=attempt, settings=settings)
+        return status, exc.code
+    except DataSourceUnavailable as exc:
+        status = _finalize_failure(
+            session, judgment_id, "ESPLORA_UNAVAILABLE", str(exc),
+            attempt=attempt, settings=settings)
+        return status, "ESPLORA_UNAVAILABLE"
+    except Exception as exc:  # noqa: BLE001 — 编排层兜底任何管线异常
+        code = _provider_error_code(exc) or "TASK_FAILED"
+        status = _finalize_failure(session, judgment_id, code, repr(exc),
+                                  attempt=attempt, settings=settings)
+        return status, code
+
+
 def _sync_seed_block_time(provider, address: str) -> float | None:
     """同步取种子地址的最近区块时间（供 live/fixture 共用）。"""
     return provider.seed_block_time(address) if hasattr(provider, "seed_block_time") else None
+
+
+def _esplora_metadata(provider, live: bool) -> dict:
+    """上游请求计数（issue #80 的预算计数点）→ span metadata。
+
+    live provider 才有这些计数；fixture 数据源不发网络请求，调用方会把
+    span 标成 skipped。只记聚合计数与截断地址数量，不记地址本身。
+    """
+    if not live:
+        return {"mode": "fixture"}
+    meta: dict = {"mode": "live"}
+    requests_used = getattr(provider, "requests_used", None)
+    if requests_used is not None:
+        meta["requests"] = int(requests_used)
+    cache_hits = getattr(provider, "cache_hits", None)
+    if cache_hits is not None:
+        meta["cache_hits"] = int(cache_hits)
+    truncated = getattr(provider, "truncated_addresses", None)
+    if truncated:
+        meta["truncated_addresses"] = len(truncated)
+    if getattr(provider, "budget_exhausted", False):
+        meta["budget_exhausted"] = True
+    return meta
 
 
 async def _isolated_sync(live: bool, fn, /, *args, **kwargs):
@@ -267,7 +314,9 @@ async def _isolated_sync(live: bool, fn, /, *args, **kwargs):
     return fn(*args, **kwargs)
 
 
-async def _execute(session, row: Judgment, settings, started: float) -> str:
+async def _execute(session, row: Judgment, settings, started: float,
+                   recorder=None, attempt: int = 1) -> str:
+    recorder = recorder or NullRecorder()
     # issue #74：协作式取消——排队/刚启动时被取消的任务不进后续耗时阶段
     if _is_cancelled(session, row.id):
         print(f"[orchestration] judgment {row.id} cancelled; aborting")
@@ -289,18 +338,32 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     live = settings.graph_data_mode == "live"
     # issue #40：阶段 1/4 — 构建子图（BFS）
     _report_stage(row.id, "building_subgraph", settings)
-    seed_time = await _isolated_sync(
-        live, _sync_seed_block_time, provider, row.address)
-    # issue #7 data_as_of：本次分析使用的链上数据时间点（种子/发起区块时间）；
-    # 无法取得统一链上时间时，记录本次查询时间（now UTC）。
-    data_as_of = (
-        datetime.fromtimestamp(seed_time, UTC) if seed_time is not None
-        else datetime.now(UTC)
-    )
-    subgraph = await _isolated_sync(
-        live, builder.build, row.address, provider,
-        hops=row.hops, time_window_days=row.time_window_days,
-        seed_block_time=seed_time)
+    # issue #73：阶段 span——建图（含上游 Esplora 请求计数的聚合子 span）。
+    # span 用独立短 session 落库，因此可安全地包裹线程池中的同步建图
+    with recorder.span("building_subgraph", attempt=attempt) as build_span:
+        with recorder.span("esplora_fetch", attempt=attempt) as esplora_span:
+            seed_time = await _isolated_sync(
+                live, _sync_seed_block_time, provider, row.address)
+            # issue #7 data_as_of：本次分析使用的链上数据时间点（种子/发起区块时间）；
+            # 无法取得统一链上时间时，记录本次查询时间（now UTC）。
+            data_as_of = (
+                datetime.fromtimestamp(seed_time, UTC) if seed_time is not None
+                else datetime.now(UTC)
+            )
+            subgraph = await _isolated_sync(
+                live, builder.build, row.address, provider,
+                hops=row.hops, time_window_days=row.time_window_days,
+                seed_block_time=seed_time)
+            esplora_span.set(**_esplora_metadata(provider, live))
+            if not live:
+                esplora_span.set_status("skipped")   # fixture 无上游请求
+        build_span.set(
+            hops=row.hops, time_window_days=row.time_window_days,
+            nodes=len(subgraph.nodes), edges=len(subgraph.edges),
+            degraded=bool(subgraph.stats.degraded),
+            missing_branches=int(subgraph.stats.missing_branches),
+            data_quality=subgraph.stats.data_quality,
+            build_elapsed_ms=round(float(subgraph.stats.elapsed_ms), 1))
     if subgraph.stats.degraded and len(subgraph.nodes) <= 1:
         # REL-05：所有扩展单元都失败 → 数据源完全分区，显式进终态
         raise DataSourceUnavailable(
@@ -320,7 +383,8 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
         retriever.retrieve, canon,
         notify=lambda stage: (
             _report_stage(row.id, stage, settings),
-            _record_stage(session, row.id, stage)))
+            _record_stage(session, row.id, stage)),
+        recorder=recorder)
 
     # issue #78/#77：检索有效性观测点——完整检索解释快照落库
     # （自包含：参数 + 召回元信息 + 候选全通道分数；E2E 断言
@@ -347,23 +411,40 @@ async def _execute(session, row: Judgment, settings, started: float) -> str:
     # issue #8：图不完整时把数据质量事实传给 LLM（谨慎判断、说明局限）
     graph_degraded = bool(subgraph.stats.degraded)
     missing_branches = int(subgraph.stats.missing_branches)
-    for attempt in range(getattr(settings, "llm_orchestration_attempts",
-                                PROVIDER_ATTEMPTS)):
-        try:
-            verdict = await judge.judge(
-                address=row.address, subgraph=canon,
-                candidates=retrieval.candidates,
-                # issue #26：把候选名称集合交给校验层收口 LLM 引用
-                candidate_names={c.name for c in retrieval.candidates},
-                builder_version=BUILDER_VERSION, model=settings.llm_model,
-                degraded=graph_degraded, missing_branches=missing_branches)
-            break
-        except Exception as exc:
-            code = _provider_error_code(exc)
-            if code is None:
-                raise  # JudgmentValidationError 等交给上层语义化处理
-            provider_code = code
-            await asyncio.sleep(0.05 * (attempt + 1))  # 退避后重试（REL-03）
+    # issue #73：llm_judging 包住整轮判断；llm_call 聚合单次调用的
+    # provider 计量（包装层的内部重试不另开 span，见 metadata.retries）
+    with recorder.span("llm_judging", attempt=attempt) as judge_span:
+        for llm_try in range(getattr(settings, "llm_orchestration_attempts",
+                                     PROVIDER_ATTEMPTS)):
+            try:
+                with recorder.span("llm_call", attempt=llm_try + 1) as call_span:
+                    verdict = await judge.judge(
+                        address=row.address, subgraph=canon,
+                        candidates=retrieval.candidates,
+                        # issue #26：把候选名称集合交给校验层收口 LLM 引用
+                        candidate_names={c.name for c in retrieval.candidates},
+                        builder_version=BUILDER_VERSION, model=settings.llm_model,
+                        degraded=graph_degraded,
+                        missing_branches=missing_branches)
+                    metrics = getattr(judge.client, "metrics", None)
+                    if metrics is not None:
+                        call_span.set(**metrics.snapshot())
+                break
+            except Exception as exc:
+                code = _provider_error_code(exc)
+                if code is None:
+                    raise  # JudgmentValidationError 等交给上层语义化处理
+                provider_code = code
+                await asyncio.sleep(0.05 * (llm_try + 1))  # 退避后重试（REL-03）
+        judge_span.set(
+            model=settings.llm_model, prompt_version=PROMPT_VERSION,
+            builder_version=BUILDER_VERSION, candidates=len(retrieval.candidates),
+            degraded=graph_degraded, missing_branches=missing_branches,
+            usage=getattr(getattr(judge.client, "metrics", None),
+                          "snapshot", lambda: {})().get("usage"))
+        if verdict is None:
+            judge_span.set_status("failed",
+                                  error_code=provider_code or "LLM_PROVIDER_ERROR")
     if verdict is None:
         raise ProviderFailure(provider_code or "LLM_PROVIDER_ERROR")
 

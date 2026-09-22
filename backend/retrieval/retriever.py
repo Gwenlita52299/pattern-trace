@@ -26,6 +26,7 @@ try:
     from .channels import channel_scores, scores_from_fingerprints
     from .channels import build_fingerprint
     from .graphormer import graphormer_query_vector
+    from ..services.tracing import NullRecorder
 except ImportError:  # 允许以脚本方式单独加载本模块
     from backend.retrieval.embedding import build_provider
     from backend.retrieval.features import (
@@ -36,6 +37,7 @@ except ImportError:  # 允许以脚本方式单独加载本模块
     from backend.retrieval.channels import channel_scores, scores_from_fingerprints
     from backend.retrieval.channels import build_fingerprint
     from backend.retrieval.graphormer import graphormer_query_vector
+    from backend.services.tracing import NullRecorder
 
 # 与 ingest canonical 同 schema 的键集——两个向量空间必须同构
 _NODE_KEYS = ("id", "kind", "label", "first_layer", "total_received_btc",
@@ -278,13 +280,16 @@ class Retriever:
     # -- 入口 ------------------------------------------------------------
     def retrieve(self, subgraph, *, exclude_ids: list[str] | None = None,
                  k: int | None = None,
-                 notify: "Callable[[str], None] | None" = None
+                 notify: "Callable[[str], None] | None" = None,
+                 recorder=None
                  ) -> RetrievalResult:
         """subgraph: SubgraphResult 或 canonical dict。
 
         notify：issue #40 阶段进度回调（"retrieval_topk" / "wl_rerank"）。
+        recorder：issue #73 持久化 span 记录器（None = 不记录，仅 Redis 进度）。
         """
         notify = notify or (lambda _stage: None)
+        recorder = recorder or NullRecorder()
         notify("retrieval_topk")
         canon = (subgraph if isinstance(subgraph, dict)
                  else subgraphresult_to_canonical(subgraph))
@@ -293,42 +298,59 @@ class Retriever:
             return RetrievalResult(empty_reason="empty_subgraph")
 
         recall_limit = self.settings.retrieval_recall_limit
-        # 查询向量三级链（issue #82）：在线 ego 前向（live 全覆盖，依赖
-        # optional torch/transformers）→ ego 语料查表池化（评测/已知地址）
-        # → hybrid 文本+结构召回。每级失败/覆盖不足自动降级。
-        mode = getattr(self.settings, "graphormer_query_mode", "auto")
-        recall_mode = "hybrid"
-        qvec = None
-        if mode in ("auto", "online"):
-            try:
-                from .graphormer_online import query_vector_online
-            except ImportError:
-                query_vector_online = None
-            if query_vector_online is not None:
-                qvec = query_vector_online(canon)
+        # issue #73：retrieval_topk span 覆盖**查询向量构建 + 召回**全过程。
+        # 向量构建（尤其 graphormer 在线前向的首次模型加载）是这个阶段里
+        # 最耗时的一段，span 起点若晚于它会留下无法归因的空洞（实测 live
+        # 形态首跑有 15s+ 落在 span 外）。
+        with recorder.span("retrieval_topk") as recall_span:
+            # 查询向量三级链（issue #82）：在线 ego 前向（live 全覆盖，依赖
+            # optional torch/transformers）→ ego 语料查表池化（评测/已知地址）
+            # → hybrid 文本+结构召回。每级失败/覆盖不足自动降级。
+            mode = getattr(self.settings, "graphormer_query_mode", "auto")
+            recall_mode = "hybrid"
+            qvec = None
+            if mode in ("auto", "online"):
+                try:
+                    from .graphormer_online import query_vector_online
+                except ImportError:
+                    query_vector_online = None
+                if query_vector_online is not None:
+                    qvec = query_vector_online(canon)
+                    if qvec is not None:
+                        recall_mode = "graphormer_online"
+            if qvec is None:
+                qvec = graphormer_query_vector(canon)
                 if qvec is not None:
-                    recall_mode = "graphormer_online"
-        if qvec is None:
-            qvec = graphormer_query_vector(canon)
+                    recall_mode = "graphormer_ego"
             if qvec is not None:
-                recall_mode = "graphormer_ego"
-        if qvec is not None:
-            recalled = self._graphormer_recall(
-                qvec, exclude_ids=exclude_ids or [], limit=recall_limit)
-        else:
-            svec = structural_features(canon)
-            evec = self._embed_canonical(canon)
-            verify_embedding_model_lock(self.session, self.settings.embedding_model)
-            recalled = self._hybrid_recall(svec, evec,
-                                           exclude_ids=exclude_ids or [],
-                                           limit=recall_limit)
+                recalled = self._graphormer_recall(
+                    qvec, exclude_ids=exclude_ids or [], limit=recall_limit)
+            else:
+                svec = structural_features(canon)
+                # issue #73：embedding 是同步 provider 调用（可能走网络），
+                # 单独成 span 以便与结构化召回区分耗时
+                with recorder.span("embedding_call") as embed_span:
+                    evec = self._embed_canonical(canon)
+                    embed_span.set(provider=self.settings.embedding_provider,
+                                   model=self.settings.embedding_model,
+                                   dim=len(evec))
+                verify_embedding_model_lock(self.session, self.settings.embedding_model)
+                recalled = self._hybrid_recall(svec, evec,
+                                               exclude_ids=exclude_ids or [],
+                                               limit=recall_limit)
+            recall_span.set(recall_mode=recall_mode, recall_limit=recall_limit,
+                            recalled=len(recalled))
         if not recalled:
             return RetrievalResult(empty_reason="no_recall_match",
                                    recall_mode=recall_mode)
 
         notify("wl_rerank")
-        result = self._rerank(canon, recalled,
-                              k or self.settings.retrieval_top_k)
+        with recorder.span("wl_rerank") as rerank_span:
+            result = self._rerank(canon, recalled,
+                                  k or self.settings.retrieval_top_k)
+            rerank_span.set(candidates=len(recalled),
+                            top_k=k or self.settings.retrieval_top_k,
+                            iterations=self.settings.wl_iterations)
         result.recall_mode = recall_mode
         result.recall_count = len(recalled)
         return result
