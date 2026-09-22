@@ -266,6 +266,20 @@ def _precheck_address_activity(address: str, settings) -> None:
             "ADDRESS_TOO_ACTIVE")
 
 
+def _request_trace_id(request) -> str:
+    """issue #73：请求级 trace 标识（沿用调用方 X-Request-Id，否则生成）。
+
+    只接受受限字符集与长度——该值会写进 DB 并在响应头回传，不能把
+    任意客户端字符串当不透明标识透传。缺失/非法时生成新的 uuid4。
+    """
+    import re
+
+    raw = (request.headers.get("x-request-id") or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9._-]{8,64}", raw):
+        return raw
+    return str(uuid.uuid4())
+
+
 def _demo_seeds(settings) -> list[str]:
     seeds = settings.demo_seeds_list
     if seeds:
@@ -703,6 +717,7 @@ def create_app() -> FastAPI:
             reclaim_zombies(session)
 
         jid = str(uuid.uuid4())
+        trace_id = _request_trace_id(request)
         created = True
         try:
             with Session(get_db_engine()) as session:
@@ -710,6 +725,8 @@ def create_app() -> FastAPI:
                     id=jid, address=body.address, hops=body.hops,
                     time_window_days=body.time_window_days,
                     mock_scenario=body.mock_scenario,
+                    # issue #73：trace 贯穿 HTTP → 队列 → worker → spans
+                    trace_id=trace_id,
                     # created_by FK 指向 users.id（与 reports 一致），存 email 会 500
                     created_by=(user or {}).get("id")))
                 session.commit()
@@ -726,6 +743,7 @@ def create_app() -> FastAPI:
             if existing is None:
                 raise
             jid, created = existing.id, False
+            trace_id = existing.trace_id or trace_id
 
         # issue #22：经 Arq 持久化队列投递，API 重启不再丢失排队中的任务；
         # Redis 不可达时 task_queue 内部降级为进程内任务（单实例部署形态）；
@@ -745,7 +763,10 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=202 if created else 200,
             content={"judgment_id": jid, "status": status_now,
-                     "poll_url": f"/api/v1/judgments/{jid}"},
+                     "poll_url": f"/api/v1/judgments/{jid}",
+                     # issue #73：trace 端点位置随创建/复用一起下发
+                     "trace_url": f"/api/v1/judgments/{jid}/trace"},
+            headers={"X-Trace-Id": trace_id or ""},
         )
 
     @app.get("/api/v1/judgments/{judgment_id}/retrieval-explanation")
@@ -794,6 +815,37 @@ def create_app() -> FastAPI:
         payload["status"] = row.status
         payload.setdefault("empty_reason", None)
         return payload
+
+    @app.get("/api/v1/judgments/{judgment_id}/trace")
+    def get_judgment_trace(judgment_id: str):
+        """issue #73：持久化的分析阶段 trace（权限同 GET judgments：匿名只读）。
+
+        与 Redis 的实时阶段通知互补：Redis 只存「当前阶段」且有 TTL，
+        本端点从 analysis_spans 读历史事实源，完成后/失败后都能看到每阶段
+        耗时、上游调用计数与稳定错误码。metadata 已在写入时脱敏，不含
+        凭据、完整 prompt、思维链或原始响应。
+        """
+        from ..models.base import Judgment
+        from ..services.tracing import list_spans, span_payload
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Judgment, judgment_id)
+            if row is None:
+                raise ProblemError(404, "Judgment not found", "NOT_FOUND")
+            spans = [span_payload(s) for s in list_spans(session, judgment_id)]
+            trace_id, status_now, row_error = row.trace_id, row.status, row.error_code
+
+        root = next((s for s in spans if s["parent_id"] is None), None)
+        return {
+            "judgment_id": judgment_id,
+            "trace_id": trace_id,
+            "status": status_now,
+            # 根 span 的 error_code 即本次分析的最终失败码（若有）
+            "error_code": (root or {}).get("error_code") or row_error,
+            "total_duration_ms": (root or {}).get("duration_ms"),
+            "stage_duration_ms": {s["name"]: s["duration_ms"] for s in spans},
+            "spans": spans,
+        }
 
     @app.get("/api/v1/judgments/{judgment_id}")
     def get_judgment(judgment_id: str):
