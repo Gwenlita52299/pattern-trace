@@ -31,7 +31,8 @@ export default function LoginForm({ redirectTo, onSuccess }: LoginFormProps) {
         access_token: string;
         user: { email: string; role: string };
       }>('/auth/login', { method: 'POST', body: { email, password } });
-      useAuthStore.getState().setSession(resp.access_token, resp.user.email);
+      useAuthStore.getState().setSession(resp.access_token, resp.user.email,
+                                         resp.user.role);
       // 登录存在性标记 cookie（restoreSession 的恢复信号；
       // 生产由后端 Set-Cookie refresh 承担）。
       // TTL 对齐后端 refresh token 的 7 天：若短于 refresh 生命周期，

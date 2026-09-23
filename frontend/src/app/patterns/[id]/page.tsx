@@ -6,9 +6,10 @@
 // 视觉编码一致）。大闭包由后端按层级截断（graph_truncated），前端明确提示。
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 
 import GraphCanvas from "@/components/GraphCanvas";
+import PatternLifecycle from "@/components/PatternLifecycle";
 import {
   getJudgment,
   getPattern,
@@ -73,17 +74,27 @@ function PatternDetailContent() {
   const [compareAddress, setCompareAddress] = useState<string>("");
   const [tab, setTab] = useState<"pattern" | "compare">("pattern");
 
+  // issue #75：编辑/审核/回滚后重新拉取（当前生效版本可能已前移）
+  const load = useCallback(
+    (reset: boolean) => {
+      if (reset) {
+        setPattern(null);
+        setNotFound(false);
+        setError(null);
+      }
+      getPattern(patternId)
+        .then(setPattern)
+        .catch((e: { status?: number; message?: string }) => {
+          if (e.status === 404) setNotFound(true);
+          else setError(e.message ?? "加载失败");
+        });
+    },
+    [patternId],
+  );
+
   useEffect(() => {
-    setPattern(null);
-    setNotFound(false);
-    setError(null);
-    getPattern(patternId)
-      .then(setPattern)
-      .catch((e: { status?: number; message?: string }) => {
-        if (e.status === 404) setNotFound(true);
-        else setError(e.message ?? "加载失败");
-      });
-  }, [patternId]);
+    load(true);
+  }, [load]);
 
   useEffect(() => {
     if (!compareJid) return;
@@ -231,6 +242,9 @@ function PatternDetailContent() {
               <GraphCanvas subgraph={patternGraph} highlightIds={new Set()} />
             ) : null}
           </div>
+
+          {/* issue #75：版本/审核/索引生命周期 */}
+          <PatternLifecycle pattern={pattern} onChanged={() => load(false)} />
         </>
       )}
     </main>

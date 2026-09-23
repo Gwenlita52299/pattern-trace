@@ -47,12 +47,15 @@ async function doRefresh(): Promise<boolean> {
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });
     if (!resp.ok) return false;
-    const data = (await resp.json()) as { access_token?: string; email?: string };
+    const data = (await resp.json()) as {
+      access_token?: string; email?: string; user?: { role?: string };
+    };
     if (!data.access_token) return false;
     const current = useAuthStore.getState();
     // email：issue #43，后端 refresh 响应携带，刷新后据此恢复用户中心展示
     useAuthStore.getState().setSession(
-      data.access_token, data.email ?? current.email ?? "");
+      data.access_token, data.email ?? current.email ?? "",
+      data.user?.role ?? current.role ?? undefined);
     return true;
   } catch {
     return false;
@@ -239,6 +242,99 @@ export async function getRetrievalExplanation(
 // issue #84：模式详情（结构预览/对比）——canonical schema 与 analyze 子图同构，
 // 可直接交给 GraphCanvas 渲染
 // ---------------------------------------------------------------------------
+// issue #75：模式生命周期类型
+export interface PatternRevision {
+  id: number | null;
+  revision: number;
+  status: string;          // draft | active | rejected
+  origin: string;          // ingest | edit | rollback | baseline | current
+  index_status: string;    // pending | indexed | failed
+  index_error?: string | null;
+  index_metadata?: Record<string, unknown>;
+  name: string;
+  source: string;
+  provenance: string;
+  evidence_grade: string;
+  content_hash: string;
+  embedding_model?: string;
+  change_note?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  description?: string;
+  canonical_subgraph?: {
+    nodes: Array<Record<string, unknown>>;
+    edges: Array<Record<string, unknown>>;
+  };
+}
+
+export interface PatternRevisionList {
+  pattern_id: string;
+  current: {
+    revision: number;
+    status: string;
+    index_status: string;
+    reviewed_by?: string | null;
+    reviewed_at?: string | null;
+    last_editor_id?: string | null;
+  };
+  items: PatternRevision[];
+}
+
+export async function listPatternRevisions(
+  patternId: string,
+): Promise<PatternRevisionList> {
+  return api<PatternRevisionList>(
+    `/patterns/${encodeURIComponent(patternId)}/revisions`);
+}
+
+export async function getPatternRevision(
+  patternId: string, revision: number,
+): Promise<PatternRevision> {
+  return api<PatternRevision>(
+    `/patterns/${encodeURIComponent(patternId)}/revisions/${revision}`);
+}
+
+export async function editPattern(
+  patternId: string,
+  body: {
+    expected_revision: number;
+    name?: string;
+    description?: string;
+    change_note?: string;
+  },
+): Promise<PatternRevision> {
+  return api<PatternRevision>(
+    `/patterns/${encodeURIComponent(patternId)}/edit`,
+    { method: "POST", body });
+}
+
+export async function reviewPattern(
+  patternId: string,
+  body: { revision: number; approve: boolean; reason?: string },
+): Promise<PatternRevision> {
+  return api<PatternRevision>(
+    `/patterns/${encodeURIComponent(patternId)}/review`,
+    { method: "POST", body });
+}
+
+export async function deprecatePattern(
+  patternId: string, expectedRevision: number,
+): Promise<{ revision: number; status: string }> {
+  return api(`/patterns/${encodeURIComponent(patternId)}/deprecate`,
+             { method: "POST", body: { expected_revision: expectedRevision } });
+}
+
+export async function rollbackPattern(
+  patternId: string,
+  body: { to_revision: number; expected_revision: number; change_note?: string },
+): Promise<PatternRevision> {
+  return api<PatternRevision>(
+    `/patterns/${encodeURIComponent(patternId)}/rollback`,
+    { method: "POST", body });
+}
+
 export interface PatternDetail {
   id: string;
   name: string;
@@ -253,6 +349,12 @@ export interface PatternDetail {
   displayed_node_count: number;
   embedding_model?: string;
   created_at?: string | null;
+  // issue #75：当前生效版本与生命周期状态
+  revision?: number;
+  status?: string;
+  index_status?: string;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
   canonical_subgraph: {
     nodes: Array<Record<string, unknown>>;
     edges: Array<Record<string, unknown>>;
