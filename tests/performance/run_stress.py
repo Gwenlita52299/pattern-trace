@@ -380,6 +380,365 @@ def cmd_cleanup(args) -> int:
     return subprocess.run(cmd, cwd=ROOT).returncode
 
 
+# ---------------------------------------------------------------- ladder
+
+POLL_ENDPOINT = "GET /api/v1/judgments/[id]"
+
+# spec §1.0 固化的容量目标（待生产数据校准；可被 CLI 覆盖并写进归档）
+GENERATOR_CPU_LIMIT = 60.0   # 生成器 CPU 超过此值，该档数据无效（spec §3.6）
+
+CAPACITY_TARGET = {
+    "target_rps": 250.0,
+    "poll_p95_ms": 300.0,
+    "poll_p99_ms": 1000.0,
+    "error_rate": 0.01,
+    "derivation": "20 并发调查员 × 5 RPS 轮询 ≈ 125 RPS 峰值，按 2× 峰值验证（spec §1.0）",
+}
+
+
+def merge_generator_results(parts: list[dict]) -> dict:
+    """合并多个生成器进程的结果（多进程压测机）。
+
+    为什么按「最大」而不是「平均」合并分位数：同一档位内 N 个进程各自独立，
+    容量结论必须由**最慢的那个**决定（保守口径）；CPU% 同理取最大——每个进程
+    是独立事件循环，任一循环饱和就说明该档位混入了压测机排队。
+    """
+    if not parts:
+        return {}
+    if len(parts) == 1:
+        return parts[0]
+
+    def pmax(field: str) -> dict:
+        keys = set()
+        for part in parts:
+            keys |= set((part.get("aggregate", {}).get(field) or {}).keys())
+        return {k: max((p["aggregate"].get(field) or {}).get(k) or 0 for p in parts)
+                for k in sorted(keys)}
+
+    endpoints: dict[str, dict] = {}
+    for part in parts:
+        for name, item in (part.get("by_endpoint") or {}).items():
+            merged = endpoints.setdefault(name, {
+                "requests": 0, "failures": 0, "error_rate": 0.0, "error_classes": {},
+                "latency_ms": {}, "corrected_ms": {}})
+            merged["requests"] += item.get("requests") or 0
+            merged["failures"] += item.get("failures") or 0
+            for field in ("latency_ms", "corrected_ms"):
+                for k, v in (item.get(field) or {}).items():
+                    merged[field][k] = max(merged[field].get(k) or 0, v)
+            for cls, count in (item.get("error_classes") or {}).items():
+                merged["error_classes"][cls] = merged["error_classes"].get(cls, 0) + count
+    for item in endpoints.values():
+        item["error_rate"] = (round(item["failures"] / item["requests"], 4)
+                              if item["requests"] else 0.0)
+
+    requests = sum(p["aggregate"]["requests"] for p in parts)
+    failures = sum(p["aggregate"]["failures"] for p in parts)
+    classes: dict[str, int] = {}
+    for part in parts:
+        for cls, count in (part["aggregate"].get("error_classes") or {}).items():
+            classes[cls] = classes.get(cls, 0) + count
+    return {
+        "config": {**parts[0].get("config", {}),
+                   "rate": sum(p["config"]["rate"] for p in parts),
+                   "generators": len(parts)},
+        "generator": {
+            "wall_seconds": max(p["generator"]["wall_seconds"] for p in parts),
+            "cpu_utilization_pct": max(p["generator"]["cpu_utilization_pct"]
+                                       for p in parts),
+            "cpu_total_pct": round(sum(p["generator"]["cpu_utilization_pct"]
+                                       for p in parts), 1),
+            "queued_arrivals": sum(p["generator"].get("queued_arrivals") or 0
+                                   for p in parts),
+            "peak_inflight": sum(p["generator"].get("peak_inflight") or 0
+                                 for p in parts),
+            "loadavg_after": max((p["generator"].get("loadavg_after") or [0])[0]
+                                 for p in parts),
+            "co_located_with_sut": any(p["generator"].get("co_located_with_sut")
+                                       for p in parts),
+            "processes": len(parts),
+        },
+        "aggregate": {
+            "requests": requests, "failures": failures,
+            "error_rate": round(failures / requests, 4) if requests else 0.0,
+            "error_classes": classes,
+            "achieved_rps": round(sum(p["aggregate"]["achieved_rps"] for p in parts), 1),
+            "target_rps": round(sum(p["aggregate"]["target_rps"] for p in parts), 1),
+            "latency_ms": pmax("latency_ms"), "corrected_ms": pmax("corrected_ms"),
+        },
+        "by_endpoint": endpoints,
+        "samples_total": sum(p.get("samples_total") or 0 for p in parts),
+        "samples_measured": sum(p.get("samples_measured") or 0 for p in parts),
+    }
+
+
+def _generator_context() -> dict:
+    """P1c：记录压测机是否与被测系统同机（同机时资源观测不可作为容量依据）。"""
+    cid = _run(_compose("ps", "-q", "backend"), timeout=30).strip()
+    return {
+        "co_located_with_sut": bool(cid),
+        "cpu_count": os.cpu_count(),
+        "loadavg_before": [round(x, 2) for x in os.getloadavg()],
+    }
+
+
+def backend_cpu_pct(observations: dict | None) -> float | None:
+    """从 docker stats 文本里取 backend 容器 CPU%（拐点可信度判定用）。"""
+    for line in ((observations or {}).get("docker_stats") or "").splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) >= 2 and parts[0].endswith("backend-1"):
+            try:
+                return float(parts[1].rstrip("%"))
+            except ValueError:
+                return None
+    return None
+
+
+def _step_metrics(step: dict, observations: dict | None = None) -> dict:
+    """从 loadgen 单档结果抽取判定所需指标（只做提取，不做判定）。"""
+    agg = step.get("aggregate") or {}
+    corrected = agg.get("corrected_ms") or {}
+    poll = ((step.get("by_endpoint") or {}).get(POLL_ENDPOINT) or {})
+    poll_corrected = poll.get("corrected_ms") or {}
+    gen = step.get("generator") or {}
+    return {
+        "target_rps": (step.get("config") or {}).get("rate"),
+        "achieved_rps": agg.get("achieved_rps"),
+        "error_rate": agg.get("error_rate"),
+        "p95_tool_ms": (agg.get("latency_ms") or {}).get("p95"),
+        "p95_corrected_ms": corrected.get("p95"),
+        "p99_corrected_ms": corrected.get("p99"),
+        "poll_p95_corrected_ms": poll_corrected.get("p95"),
+        "poll_p99_corrected_ms": poll_corrected.get("p99"),
+        "poll_error_rate": poll.get("error_rate"),
+        "generator_cpu_pct": gen.get("cpu_utilization_pct"),
+        "generator_bound": (gen.get("cpu_utilization_pct") or 0) >= GENERATOR_CPU_LIMIT,
+        "co_gap_x": (round(corrected.get("p95") / (agg.get("latency_ms") or {}).get("p95"), 1)
+                     if (corrected.get("p95") and (agg.get("latency_ms") or {}).get("p95"))
+                     else None),
+        "queued_arrivals": gen.get("queued_arrivals"),
+        "peak_inflight": gen.get("peak_inflight"),
+        "samples_measured": step.get("samples_measured"),
+        "loadavg_after": gen.get("loadavg_after"),
+        "server_cpu_pct": backend_cpu_pct(observations),
+        "knee_reasons": [],
+        "knee": False,
+    }
+
+
+def detect_knee(steps: list[dict],
+                target_rps: float | None = None) -> dict:
+    """spec §3.5 的**唯一**拐点判定点：四个条件任一成立即该档触拐点。
+
+    判定集中在这里而不是散在各处：否则「哪档算触拐点」会出现两套口径，
+    报告与早停结论可能不一致。只做判定，不做指标提取（_step_metrics 负责）。
+    """
+    if not steps:
+        return {"knee_at_rate": None, "reasons": [], "notes": ["无有效档位"]}
+    target = target_rps or CAPACITY_TARGET["target_rps"]
+    baseline = steps[0].get("p95_corrected_ms") or 0
+    notes: list[str] = []
+    valid: list[dict] = []
+    for step in steps:
+        gen_cpu = step.get("generator_cpu_pct") or 0
+        step["invalid_generator_bound"] = gen_cpu >= GENERATOR_CPU_LIMIT
+        if step["invalid_generator_bound"]:
+            # 压测机先饱和：校正延迟里混的是生成器排队，不是服务端排队。
+            # 该档既不作为拐点，也不作为容量证据（否则会把「压测机不够」误报成「服务端到顶」）。
+            step["invalid_reasons"] = [
+                f"生成器 CPU {gen_cpu}% ≥ {GENERATOR_CPU_LIMIT:g}%"
+                + (f"，校正/工具延迟比 {step['co_gap_x']}×" if step.get("co_gap_x") else "")
+                + "：该档由压测机饱和导致，不代表服务端容量，需独立压测机重跑"]
+            step["knee_reasons"] = []
+            step["knee"] = False
+            continue
+        reasons: list[str] = []
+        p95 = step.get("p95_corrected_ms") or 0
+        err = step.get("error_rate") or 0
+        achieved = step.get("achieved_rps") or 0
+        if baseline and p95 >= 3 * baseline:
+            reasons.append(f"校正 p95 {p95}ms ≥ 首档 {baseline}ms 的 3×（尾延迟非线性抬升）")
+        if err >= CAPACITY_TARGET["error_rate"]:
+            reasons.append(f"错误率 {err:.2%} ≥ 1%")
+        if achieved and achieved < 0.9 * step.get("target_rps", target):
+            reasons.append(f"实测 RPS {achieved} < 目标 {step.get('target_rps', target)} 的 90%")
+        step["knee_reasons"] = reasons
+        step["knee"] = bool(reasons)
+        # 拐点必须能被服务端资源解释：若该档服务端 CPU 仍很低，说明延迟来自压测环境
+        # （同机竞争/容器网络/压测机排队），据此宣布「容量上限」是错的结论。
+        cpu = step.get("server_cpu_pct")
+        step["knee_trustworthy"] = not (reasons and cpu is not None and cpu < 10)
+        if reasons and not step["knee_trustworthy"]:
+            step["knee_reasons"] = reasons + [
+                f"服务端 CPU 仅 {cpu}%：延迟抬升无法由服务端资源解释，"
+                f"疑为压测环境限制（同机/容器网络），不可据此认定容量上限"]
+        valid.append(step)
+    knees = [s for s in valid if s.get("knee")]
+    trusted = [s for s in knees if s.get("knee_trustworthy")]
+    untrusted = [s for s in knees if not s.get("knee_trustworthy")]
+    invalid = [s for s in steps if s.get("invalid_generator_bound")]
+    if not knees:
+        notes.append("有效档位内未触拐点（尾延迟未出现非线性抬升、错误率未抬头）")
+    if invalid:
+        notes.append("档位 " + "/".join(f"{s['target_rps']:g}" for s in invalid)
+                     + " RPS 因压测机饱和数据无效，已排除在拐点判定之外")
+    if untrusted:
+        notes.append("档位 " + "/".join(f"{s['target_rps']:g}" for s in untrusted)
+                     + " RPS 的延迟抬升伴随服务端低 CPU，判为环境限制而非容量上限")
+    return {
+        "knee_at_rate": trusted[0]["target_rps"] if trusted else None,
+        "untrusted_knee_rates": [s["target_rps"] for s in untrusted],
+        "reasons": trusted[0]["knee_reasons"] if trusted else [],
+        "notes": notes,
+        "baseline_p95_corrected_ms": baseline,
+        "highest_step_rps": steps[-1]["target_rps"],
+        "validated_max_rps": max([s["target_rps"] for s in valid] or [0]),
+        "invalid_steps": [s["target_rps"] for s in invalid],
+    }
+
+
+def decide_status(knee: dict, target: float) -> str:
+    """四态结论：meets / below / environment_limited / indeterminate。
+
+    区分 environment_limited 与 below 是本轮最重要的口径修正：延迟抬升若伴随
+    服务端低 CPU，瓶颈更可能在压测环境（同机竞争、容器网络、压测机排队），
+    宣布「容量上限」会把环境问题写成产品结论。
+    """
+    if knee.get("knee_at_rate") is not None:
+        return "below" if knee["knee_at_rate"] <= target else "meets"
+    if knee.get("untrusted_knee_rates"):
+        return "environment_limited"
+    if (knee.get("validated_max_rps") or 0) >= target:
+        return "meets"
+    return "indeterminate"
+
+
+def cmd_ladder(args) -> int:
+    if cmd_guard(argparse.Namespace(allow_non_fixture=args.allow_non_fixture)) != 0:
+        return 1
+    if args.pool:
+        pool_path = Path(args.pool)
+        if not pool_path.is_absolute():
+            pool_path = ROOT / pool_path
+    else:
+        pool_path = OUTPUT_ROOT / "pools" / f"{args.tag}-pool.json"
+    if not pool_path.exists():
+        print(f"[info] 池文件不存在，先按 {args.tag} 生成")
+        if cmd_pool(argparse.Namespace(tag=args.tag, hot=args.hot, cold=args.cold,
+                                       addresses=args.addresses,
+                                       hot_hours=args.hot_hours)) != 0:
+            return 1
+    payload = pool.load_pool(pool_path)
+    if not pool.pool_usable_as_baseline(payload) and not args.allow_derived_pool:
+        print("[FAIL] 池不满足基线口径（热/冷两档需都非空）；冒烟请传 --allow-derived-pool")
+        return 1
+
+    started = datetime.now(timezone.utc)
+    archive = OUTPUT_ROOT / f"{started:%Y%m%d}-{args.tag}"
+    archive.mkdir(parents=True, exist_ok=True)
+    ctx = _generator_context()
+    if ctx["co_located_with_sut"]:
+        print("[warn] 压测机与被测系统同机（已知偏差）：资源观测不可作为容量依据，"
+              "已记入归档；生产级判定需把生成器放到独立机器")
+    rates = [float(x) for x in args.rates.split(",") if x.strip()]
+    steps: list[dict] = []
+
+    for rate in rates:
+        parts = max(1, args.generators)
+        per_rate = rate / parts
+        procs, outs = [], []
+        for index in range(parts):
+            out = archive / (f"step-{rate:g}.json" if parts == 1
+                             else f"step-{rate:g}-g{index + 1}.json")
+            cmd = [sys.executable, str(HERE / "loadgen.py"), "--rate", str(per_rate),
+                   "--duration", args.step_duration, "--warmup", args.warmup,
+                   "--host", args.host, "--pool", str(pool_path), "--tier", args.tier,
+                   "--out", str(out), "--max-concurrency", str(args.max_concurrency)]
+            if args.poisson:
+                cmd.append("--poisson")
+            if ctx["co_located_with_sut"]:
+                cmd.append("--co-located")
+            procs.append(subprocess.Popen(cmd, cwd=ROOT))
+            outs.append(out)
+        codes = [proc.wait() for proc in procs]
+        if any(code != 0 for code in codes) or not all(o.exists() for o in outs):
+            print(f"[FAIL] 档位 {rate:g} 生成器失败（退出码 {codes}）")
+            return 1
+        merged = merge_generator_results([json.loads(o.read_text()) for o in outs])
+        if parts > 1:
+            (archive / f"step-{rate:g}.json").write_text(
+                json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
+        step_obs = collect_observations()
+        (archive / f"observations-step-{rate:g}.json").write_text(
+            json.dumps(step_obs, ensure_ascii=False, indent=2) + "\n")
+        metrics = _step_metrics(merged, step_obs)
+        steps.append(metrics)
+        detect_knee(steps, rate)   # 逐档即时判定，决定是否继续升压
+        print(f"[ok] 档位 {rate:g}：achieved={metrics['achieved_rps']} "
+              f"err={metrics['error_rate']:.2%} "
+              f"p95={metrics['p95_corrected_ms']}ms(corrected) "
+              f"p99={metrics['p99_corrected_ms']}ms "
+              f"gen_cpu={metrics['generator_cpu_pct']}%"
+              + (f" ⚠ {metrics['knee_reasons']}" if metrics["knee"] else ""))
+        if metrics["knee"] and not args.continue_past_knee:
+            print("[stop] 已触拐点，停止升压（--continue-past-knee 可继续观察崩溃形态）")
+            break
+
+    knee = detect_knee(steps, args.target_rps)
+    target = args.target_rps
+    validated = knee.get("validated_max_rps") or 0
+    status = decide_status(knee, target)
+    verdict = {
+        "status": status,
+        "capacity_target_rps": target,
+        "knee_at_rate": knee["knee_at_rate"],
+        "validated_max_rps": validated,
+        "invalid_steps": knee.get("invalid_steps") or [],
+        "untrusted_knee_rates": knee.get("untrusted_knee_rates") or [],
+        "reasons": knee["reasons"],
+        "notes": knee["notes"],
+        "meets_target": status == "meets",
+        "margin_x": round(validated / target, 2) if target else None,
+    }
+    summary = {
+        "kind": "ladder",
+        "tag": args.tag,
+        "profile": f"ladder({args.tier})",
+        "pool_tier": args.tier,
+        "pool_origin": _rel(pool_path),
+        "pool_usable_as_baseline": pool.pool_usable_as_baseline(payload),
+        "pool_meta": payload.get("meta", {}),
+        "host": args.host,
+        "duration": args.step_duration,
+        "started_at": started.isoformat(),
+        "git_sha": _git_sha(),
+        "hardware": {"platform": platform.platform(), "cpu_count": os.cpu_count()},
+        "guard": "passed",
+        "generator_context": ctx,
+        "capacity_target": {**CAPACITY_TARGET, "target_rps": target},
+        "steps": steps,
+        "knee": knee,
+        "verdict": verdict,
+        "observations_file": "observations-step-*.json",
+    }
+    (archive / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+    print(f"[ok] 阶梯归档 {_rel(archive)}")
+    if status == "meets":
+        print(f"[ok] 达到容量目标 {target:g} RPS（有效验证上限 {validated:g} RPS，未见服务端拐点）")
+    elif status == "below":
+        print(f"[FAIL] 拐点 {knee['knee_at_rate']:g} RPS 低于目标 {target:g} RPS"
+              f"：{verdict['reasons']}")
+    elif status == "environment_limited":
+        print(f"[warn] 档位 {verdict['untrusted_knee_rates']} 出现延迟抬升但服务端 CPU 很低："
+              "判为压测环境限制，**不能**认定容量上限——需独立压测机 + 服务端侧延迟分解")
+    else:
+        print(f"[warn] 未验证到目标 {target:g} RPS：有效档位最高 {validated:g} RPS；"
+              f"档位 {verdict['invalid_steps']} 因压测机饱和无效——需独立压测机重跑")
+    cmd_report(argparse.Namespace(archive=str(archive)))
+    return 0 if status == "meets" else 1
+
+
 # ---------------------------------------------------------------- report
 
 # 调性沿用 docs/design-tone.md：冷灰炭底 + 琥珀作唯一强调色（这里琥珀只标
@@ -444,6 +803,13 @@ a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--lin
 a:hover { border-bottom-color: var(--amber); }
 """
 
+_STATUS_TAG = {
+    "meets": "✓ 达到容量目标",
+    "below": "⚠ 未达容量目标",
+    "indeterminate": "⚠ 未验证到目标（受压测机限制）",
+    "environment_limited": "⚠ 拐点不可信（疑压测环境限制）",
+}
+
 _AMBER = "#f0b429"
 _MUTED = "#8b93a1"
 
@@ -487,10 +853,11 @@ def _aggregate_endpoints(rows: list[dict]) -> list[dict]:
             continue
         key = _normalize_name(name)
         item = groups.setdefault(key, {"name": key, "requests": 0, "failures": 0,
-                                       "p95": 0.0, "max": 0.0, "rps": 0.0})
+                                       "p95": 0.0, "p99": 0.0, "max": 0.0, "rps": 0.0})
         item["requests"] += int(_num(row.get("Request Count")))
         item["failures"] += int(_num(row.get("Failure Count")))
         item["p95"] = max(item["p95"], _num(row.get("95%")))
+        item["p99"] = max(item["p99"], _num(row.get("99%")))
         item["max"] = max(item["max"], _num(row.get("Max Response Time")))
         item["rps"] += _num(row.get("Requests/s"))
     return sorted(groups.values(), key=lambda i: -i["requests"])
@@ -519,7 +886,16 @@ def _sparkline(points: list[float], color: str = _MUTED) -> str:
 
 def render_html(summary: dict, observations: dict, endpoint_rows: list[dict],
                 history_rows: list[dict], failures_rows: list[dict]) -> str:
-    """把归档渲染成自包含 HTML（纯函数，便于单测）。"""
+    """归档 → 自包含 HTML。阶梯归档走 _render_ladder，单档走 _render_locust。"""
+    if summary.get("kind") == "ladder":
+        return _render_ladder(summary, observations, {})
+    return _render_locust(summary, observations, endpoint_rows, history_rows,
+                          failures_rows)
+
+
+def _render_locust(summary: dict, observations: dict, endpoint_rows: list[dict],
+                   history_rows: list[dict], failures_rows: list[dict]) -> str:
+    """单档（Locust 闭环）归档的渲染。"""
     import html
 
     esc = lambda v: html.escape(str(v), quote=True)  # noqa: E731
@@ -568,7 +944,8 @@ def render_html(summary: dict, observations: dict, endpoint_rows: list[dict],
         f"<tr class='{'fail' if item['failures'] else ''}'>"
         f"<td>{esc(item['name'])}</td><td>{item['requests']}</td>"
         f"<td>{item['failures']}</td><td>{item['p95']:.0f}</td>"
-        f"<td>{item['max']:.0f}</td><td>{item['rps']:.1f}</td></tr>"
+        f"<td>{item['p99']:.0f}</td><td>{item['max']:.0f}</td>"
+        f"<td>{item['rps']:.1f}</td></tr>"
         for item in _aggregate_endpoints(endpoint_rows))
 
     failure_table = "".join(
@@ -642,8 +1019,8 @@ def render_html(summary: dict, observations: dict, endpoint_rows: list[dict],
 
 <h2>端点明细（按归一化路径聚合，p95 取组内最大）</h2>
 <table><thead><tr><th>端点</th><th>请求</th><th>失败</th><th>p95 (ms)</th>
-<th>max (ms)</th><th>req/s</th></tr></thead>
-<tbody>{endpoint_table or "<tr><td>—</td><td colspan='5'>无数据</td></tr>"}</tbody></table>
+<th>p99 (ms)</th><th>max (ms)</th><th>req/s</th></tr></thead>
+<tbody>{endpoint_table or "<tr><td>—</td><td colspan='6'>无数据</td></tr>"}</tbody></table>
 
 <h2>失败明细</h2>
 <table><thead><tr><th>端点</th><th>错误</th><th>次数</th></tr></thead>
@@ -657,6 +1034,159 @@ def render_html(summary: dict, observations: dict, endpoint_rows: list[dict],
 {esc(summary.get('vu'))} VU / {esc(summary.get('duration'))}，不可外推到更高并发或更大数据量。
 冷热两档在数据量不足以撑出缓存差异时读数会相同——那是数据规模的限制，不是缓存无所谓的证据。
 生成方式：<code>uv run python tests/performance/run_stress.py report</code>
+</p>
+</div></body></html>
+"""
+
+
+def _render_ladder(summary: dict, observations: dict, step_detail: dict) -> str:
+    """阶梯归档渲染：拐点结论 + 逐档表 + 校正延迟曲线（spec §3.5/§3.6）。"""
+    import html
+
+    esc = lambda v: html.escape(str(v), quote=True)  # noqa: E731
+    steps = summary.get("steps") or []
+    verdict = summary.get("verdict") or {}
+    knee = summary.get("knee") or {}
+    target = verdict.get("capacity_target_rps")
+    meets = bool(verdict.get("meets_target"))
+    status = verdict.get("status") or ("meets" if meets else "below")
+    validated = verdict.get("validated_max_rps") or 0
+    if status == "meets":
+        note_text = (f"有效验证到 {validated:g} RPS（目标 {target:g} RPS），未见服务端拐点")
+    elif status == "below":
+        note_text = f"拐点 {knee.get('knee_at_rate'):g} RPS 低于目标 {target:g} RPS"
+    elif status == "environment_limited":
+        note_text = ("档位 " + "/".join(f"{r:g}" for r in verdict.get("untrusted_knee_rates") or [])
+                     + f" 出现延迟抬升，但服务端 CPU 很低——判为压测环境限制，"
+                       f"不能据此认定容量上限（目标 {target:g} RPS 仍未验证）")
+    else:
+        note_text = (f"未验证到目标 {target:g} RPS：有效档位最高 {validated:g} RPS，"
+                     f"档位 {verdict.get('invalid_steps')} 因压测机饱和无效")
+    gen_ctx = summary.get("generator_context") or {}
+
+    def card(label, value, flag=False):
+        return (f"<div class='card{' flag' if flag else ''}'>"
+                f"<div class='k'>{esc(label)}</div>"
+                f"<div class='v'>{esc(value)}</div></div>")
+
+    gen_peak = max([s.get("generator_cpu_pct") or 0 for s in steps] or [0])
+    cards = "".join([
+        card("容量目标", f"{target:g} RPS" if target else "n/a"),
+        card("有效验证上限", f"{verdict.get('validated_max_rps', 0):g} RPS",
+             not meets),
+        card("拐点", f"{knee['knee_at_rate']:g} RPS" if knee.get("knee_at_rate")
+             else "未触", bool(knee.get("knee_at_rate"))),
+        card("余量倍数", f"{verdict.get('margin_x')}×" if verdict.get("margin_x") else "n/a",
+             not meets),
+        card("生成器峰值 CPU", f"{gen_peak:g}%", gen_peak >= 60),
+        card("数据规模", (summary.get("pool_meta") or {}).get("scale", {}).get(
+            "judgments_total", "?")),
+    ])
+
+    def verdict_cell(step) -> str:
+        if step.get("knee"):
+            return "⚠ 触拐点"
+        if step.get("invalid_generator_bound"):
+            return "✕ 无效（压测机饱和）"
+        if step.get("knee") and not step.get("knee_trustworthy"):
+            return "⚠ 抬升但疑环境限制"
+        return "✓ 通过"
+
+    def row(step):
+        flagged = step.get("knee") or step.get("invalid_generator_bound")
+        err = step.get("error_rate")
+        return (
+            f"<tr class='{'fail' if flagged else ''}'>"
+            f"<td>{step['target_rps']:g}</td><td>{step.get('achieved_rps')}</td>"
+            f"<td>{step.get('p95_tool_ms')}</td><td>{step.get('p95_corrected_ms')}</td>"
+            f"<td>{step.get('p99_corrected_ms')}</td>"
+            f"<td>{step.get('poll_p95_corrected_ms')}</td>"
+            f"<td>{step.get('poll_p99_corrected_ms')}</td>"
+            f"<td>{0 if err is None else err:.2%}</td>"
+            f"<td>{step.get('generator_cpu_pct')}</td>"
+            f"<td>{step.get('server_cpu_pct')}</td>"
+            f"<td>{verdict_cell(step)}</td></tr>")
+
+    ladder_rows = "".join(row(s) for s in steps) or \
+        "<tr><td colspan='10'>无有效档位</td></tr>"
+
+    endpoints = ((step_detail.get("by_endpoint") or {}) if step_detail else {})
+    endpoint_table = "".join(
+        f"<tr class='{'fail' if item.get('failures') else ''}'>"
+        f"<td>{esc(name)}</td><td>{item.get('requests')}</td>"
+        f"<td>{item.get('failures')}</td>"
+        f"<td>{(item.get('corrected_ms') or {}).get('p50')}</td>"
+        f"<td>{(item.get('corrected_ms') or {}).get('p95')}</td>"
+        f"<td>{(item.get('corrected_ms') or {}).get('p99')}</td></tr>"
+        for name, item in sorted(endpoints.items(),
+                                 key=lambda kv: -(kv[1].get("requests") or 0)))
+
+    poll_p95_series = [s.get("poll_p95_corrected_ms") or 0 for s in steps]
+    err_series = [(s.get("error_rate") or 0) * 100 for s in steps]
+    obs = observations or {}
+    obs_rows = "".join(
+        f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in [
+            ("队列深度（末档）", obs.get("queues")),
+            ("analysis_spans", obs.get("analysis_spans")),
+            ("PG 连接数", obs.get("pg_activity")),
+            ("PG 等待事件", obs.get("pg_wait_events")),
+            ("docker stats（末档）", (obs.get("docker_stats") or "").splitlines()),
+            ("压测机", {**gen_ctx, "loadavg_after":
+                        (steps[-1] if steps else {}).get("loadavg_after")}),
+        ] if v not in (None, "", []))
+
+    reasons = "".join(f"<li>{esc(r)}</li>" for r in (knee.get("reasons") or []))
+    reasons += "".join(
+        f"<li>{esc(r)}</li>" for step in steps
+        for r in (step.get("invalid_reasons") or []))
+    if not reasons:
+        reasons = "<li>有效档位内未出现非线性抬升 / 错误率抬头 / 报价跟不上</li>"
+
+    return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阶梯压测报告 · {esc(summary.get('tag'))}</title>
+<style>{_REPORT_CSS}</style></head>
+<body><div class="wrap">
+<h1>阶梯压测报告 · {esc(summary.get('tag'))}</h1>
+<div class="sub">开放模型（固定到达率）· {esc(summary.get('profile'))} ·
+ {esc(summary.get('started_at'))} · git {esc(summary.get('git_sha'))}</div>
+
+<div class="verdict {'bad' if not meets else ''}">
+  <span class="tag">{_STATUS_TAG.get(status, status)}</span>
+  <span class="note">{esc(note_text)}</span>
+</div>
+
+<div class="cards">{cards}</div>
+
+<h2>拐点判定（spec §3.5）</h2>
+<ul>{reasons}</ul>
+<p class="sub">判定用校正延迟（从计划发出时刻计，含排队等待）；工具口径会系统性低估尾延迟。
+目标推导：{esc((summary.get('capacity_target') or {}).get('derivation'))}</p>
+
+<h2>逐档结果</h2>
+<table><thead><tr><th>目标 RPS</th><th>实测 RPS</th><th>p95 工具</th><th>p95 校正</th>
+<th>p99 校正</th><th>轮询 p95</th><th>轮询 p99</th><th>错误率</th><th>生成器 CPU</th><th>服务端 CPU</th>
+<th>判定</th></tr></thead><tbody>{ladder_rows}</tbody></table>
+
+<h2>趋势（按档位）</h2>
+<div class="spark">
+  <figure><figcaption>轮询 p95 校正 (ms)</figcaption>
+    {_sparkline(poll_p95_series, _AMBER)}</figure>
+  <figure><figcaption>错误率 (%)</figcaption>{_sparkline(err_series, _MUTED)}</figure>
+</div>
+
+<h2>端点明细（最高档，校正分位数）</h2>
+<table><thead><tr><th>端点</th><th>请求</th><th>失败</th><th>p50</th><th>p95</th>
+<th>p99</th></tr></thead>
+<tbody>{endpoint_table or "<tr><td>—</td><td colspan='5'>无数据</td></tr>"}</tbody></table>
+
+<h2>观测与偏差</h2><dl>{obs_rows}</dl>
+
+<p class="foot">口径：热/冷两档不可合并统计；校正延迟含排队等待，判定以它为准。
+{'<strong>本次压测机与被测系统同机，资源观测不可作为容量依据</strong>；'
+ '生产级判定需把生成器放到独立机器并确认其 CPU 余量。' if gen_ctx.get('co_located_with_sut') else ''}
+生成方式：<code>uv run python tests/performance/run_stress.py ladder ...</code>
 </p>
 </div></body></html>
 """
@@ -676,15 +1206,28 @@ def cmd_report(args) -> int:
             print(f"[skip] {_rel(archive)} 无 summary.json")
             continue
         summary = json.loads(summary_path.read_text())
-        observations = {}
-        obs_path = archive / "observations.json"
-        if obs_path.exists():
-            observations = json.loads(obs_path.read_text())
-        html_text = render_html(
-            summary, observations,
-            _read_csv(archive / "locust_stats.csv"),
-            _read_csv(archive / "locust_stats_history.csv"),
-            _read_csv(archive / "locust_failures.csv"))
+        if summary.get("kind") == "ladder":
+            steps = summary.get("steps") or []
+            detail = {}
+            if steps:
+                step_file = archive / f"step-{steps[-1]['target_rps']:g}.json"
+                if step_file.exists():
+                    detail = json.loads(step_file.read_text())
+            obs = {}
+            obs_files = sorted(archive.glob("observations-step-*.json"))
+            if obs_files:
+                obs = json.loads(obs_files[-1].read_text())
+            html_text = _render_ladder(summary, obs, detail)
+        else:
+            observations = {}
+            obs_path = archive / "observations.json"
+            if obs_path.exists():
+                observations = json.loads(obs_path.read_text())
+            html_text = render_html(
+                summary, observations,
+                _read_csv(archive / "locust_stats.csv"),
+                _read_csv(archive / "locust_stats_history.csv"),
+                _read_csv(archive / "locust_failures.csv"))
         out = archive / "report.html"
         out.write_text(html_text)
         written.append(out)
@@ -753,8 +1296,30 @@ def main(argv: list[str]) -> int:
                    help="指定归档目录；缺省渲染 output/stress 下全部归档并生成 index.html")
     r.set_defaults(func=cmd_report)
 
-    ladder = sub.add_parser("ladder", help="VU 阶梯（P1）")
-    ladder.set_defaults(func=lambda a: _pending("ladder"))
+    ladder = sub.add_parser("ladder", help="开放模型阶梯升压 + 拐点判定")
+    ladder.add_argument("--tag", required=True)
+    ladder.add_argument("--rates", default="25,50,100,200,400",
+                        help="目标到达率阶梯（逗号分隔，RPS）")
+    ladder.add_argument("--step-duration", default="120s", help="每档测量时长")
+    ladder.add_argument("--warmup", default="20s", help="每档预热（不计入统计）")
+    ladder.add_argument("--tier", default="hot", choices=["hot", "cold"])
+    ladder.add_argument("--host", default=DEFAULT_HOST)
+    ladder.add_argument("--pool", default=None)
+    ladder.add_argument("--target-rps", type=float,
+                        default=CAPACITY_TARGET["target_rps"],
+                        help="容量目标（spec §1.0，默认 250）")
+    ladder.add_argument("--max-concurrency", type=int, default=256)
+    ladder.add_argument("--generators", type=int, default=1,
+                        help="生成器进程数（单进程在 ~250 RPS 触顶；多进程可探更高）")
+    ladder.add_argument("--poisson", action="store_true", help="泊松到达（默认均匀）")
+    ladder.add_argument("--continue-past-knee", action="store_true")
+    ladder.add_argument("--hot", type=int, default=500)
+    ladder.add_argument("--cold", type=int, default=500)
+    ladder.add_argument("--addresses", type=int, default=200)
+    ladder.add_argument("--hot-hours", type=int, default=1)
+    ladder.add_argument("--allow-non-fixture", action="store_true")
+    ladder.add_argument("--allow-derived-pool", action="store_true")
+    ladder.set_defaults(func=cmd_ladder)
     compare = sub.add_parser("compare", help="与基线对比（P1）")
     compare.set_defaults(func=lambda a: _pending("compare"))
 
