@@ -739,6 +739,182 @@ def cmd_ladder(args) -> int:
     return 0 if status == "meets" else 1
 
 
+# ---------------------------------------------------------------- compare
+
+def series_from_ladder(summary: dict) -> dict[str, dict]:
+    """阶梯归档的对比序列：键为档位（目标 RPS），值为该档指标。"""
+    out: dict[str, dict] = {}
+    for step in summary.get("steps") or []:
+        rate = step.get("target_rps")
+        if rate is None:
+            continue
+        out[f"{rate:g} RPS"] = {
+            "p95": step.get("p95_corrected_ms"),
+            "p99": step.get("p99_corrected_ms"),
+            "poll_p95": step.get("poll_p95_corrected_ms"),
+            "error_rate": step.get("error_rate"),
+            "throughput": step.get("achieved_rps"),
+            "trustworthy": step.get("knee_trustworthy", True)
+            and not step.get("invalid_generator_bound"),
+        }
+    return out
+
+
+def series_from_locust(summary: dict, endpoint_rows: list[dict]) -> dict[str, dict]:
+    """单档归档的对比序列：键为归一化端点名（含 Aggregated）。"""
+    out: dict[str, dict] = {}
+    locust = summary.get("locust") or {}
+    out["Aggregated"] = {
+        "p95": locust.get("p95_ms"), "p99": None,
+        "poll_p95": next((v.get("p95_ms") for k, v in (locust.get("by_name") or {}).items()
+                          if "judgments" in k), None),
+        "error_rate": locust.get("error_rate"),
+        "throughput": None, "trustworthy": True,
+    }
+    for item in _aggregate_endpoints(endpoint_rows):
+        out[item["name"]] = {
+            "p95": item["p95"], "p99": item["p99"],
+            "poll_p95": None, "error_rate": (item["failures"] / item["requests"]
+                                             if item["requests"] else 0.0),
+            "throughput": item["rps"], "trustworthy": True,
+        }
+    return out
+
+
+def compatibility(cand: dict, base: dict) -> list[str]:
+    """对比前提校验：口径不同的两次运行不可比较（宁可拒绝，不要产出假结论）。"""
+    problems: list[str] = []
+    cand_kind = cand.get("kind", "locust")
+    base_kind = base.get("kind", "locust")
+    if cand_kind != base_kind:
+        problems.append(f"归档类型不同：候选 {cand_kind} vs 基线 {base_kind}")
+    for field, label in (("profile", "profile"), ("pool_tier", "池档位")):
+        if cand.get(field) != base.get(field):
+            problems.append(f"{label} 不同：{cand.get(field)} vs {base.get(field)}")
+    cand_scale = ((cand.get("pool_meta") or {}).get("scale") or {}).get("judgments_total")
+    base_scale = ((base.get("pool_meta") or {}).get("scale") or {}).get("judgments_total")
+    if cand_scale and base_scale and cand_scale != base_scale:
+        problems.append(f"数据规模不同：{cand_scale} vs {base_scale} 行（缓存命中率不可比）")
+    cand_cpu = (cand.get("hardware") or {}).get("cpu_count")
+    base_cpu = (base.get("hardware") or {}).get("cpu_count")
+    if cand_cpu and base_cpu and cand_cpu != base_cpu:
+        problems.append(f"硬件核数不同：{cand_cpu} vs {base_cpu}")
+    return problems
+
+
+def build_comparison(cand: dict, base: dict, cand_series: dict[str, dict],
+                     base_series: dict[str, dict],
+                     threshold: float = 0.30) -> dict:
+    """逐键对比并标记劣化（p95 劣化 > threshold；错误率同时看绝对与相对增幅）。
+
+    纯函数：不读文件、不打印，便于单测与自校验（同一份自比必须报 0%）。
+    """
+    rows: list[dict] = []
+    for key in sorted(set(cand_series) | set(base_series)):
+        c = cand_series.get(key)
+        b = base_series.get(key)
+        if b is None:
+            rows.append({"key": key, "status": "added", "note": "基线无此档位/端点"})
+            continue
+        if c is None:
+            rows.append({"key": key, "status": "removed", "note": "本次缺少该档位/端点"})
+            continue
+        row = {"key": key, "status": "ok", "trustworthy": c.get("trustworthy", True)}
+        regressions: list[str] = []
+        for field, label in (("p95", "p95"), ("p99", "p99"), ("poll_p95", "轮询 p95")):
+            cv, bv = c.get(field), b.get(field)
+            if cv is None or bv in (None, 0):
+                continue
+            delta = cv / bv - 1
+            row[f"{field}_delta"] = round(delta, 3)
+            if delta > threshold:
+                regressions.append(f"{label} 劣化 {delta:+.1%}（{bv} → {cv}）")
+        ce, be = c.get("error_rate"), b.get("error_rate")
+        if ce is not None and be is not None:
+            row["error_rate_delta"] = round(ce - be, 4)
+            if ce > be + 0.005 and (be == 0 or ce > 2 * be):
+                regressions.append(f"错误率上升 {be:.2%} → {ce:.2%}")
+        ct, bt = c.get("throughput"), b.get("throughput")
+        if ct and bt:
+            delta = ct / bt - 1
+            row["throughput_delta"] = round(delta, 3)
+            if delta < -threshold:
+                regressions.append(f"吞吐下降 {delta:+.1%}（{bt} → {ct}）")
+        if regressions:
+            row["status"] = "regressed"
+            row["regressions"] = regressions
+            if not row["trustworthy"]:
+                row["note"] = "该档位数据本身无效（压测机饱和/环境限制），劣化仅供参考"
+        rows.append(row)
+    regressed = [r for r in rows if r["status"] == "regressed"]
+    return {
+        "threshold": threshold,
+        "candidate": {"tag": cand.get("tag"), "started_at": cand.get("started_at"),
+                      "git_sha": cand.get("git_sha")},
+        "baseline": {"tag": base.get("tag"), "started_at": base.get("started_at"),
+                     "git_sha": base.get("git_sha")},
+        "rows": rows,
+        "regressions": len(regressed),
+        "regressed_keys": [r["key"] for r in regressed],
+        "verdict": "regressed" if regressed else "clean",
+    }
+
+
+def _archive_summary(path: Path) -> dict:
+    summary_path = path / "summary.json"
+    if not summary_path.exists():
+        raise SystemExit(f"[FAIL] {path} 不是归档目录（缺 summary.json）")
+    return json.loads(summary_path.read_text())
+
+
+def cmd_compare(args) -> int:
+    cand_dir = Path(args.candidate)
+    if not cand_dir.is_absolute():
+        cand_dir = ROOT / cand_dir
+    base_dir = Path(args.baseline)
+    if not base_dir.is_absolute():
+        base_dir = ROOT / base_dir
+    cand, base = _archive_summary(cand_dir), _archive_summary(base_dir)
+
+    problems = compatibility(cand, base)
+    if problems and not args.force:
+        print("[FAIL] 两次运行口径不同，对比结论不可用：")
+        for problem in problems:
+            print(f"  - {problem}")
+        print("（确要对比请传 --force，归档会标注口径不一致）")
+        return 2
+
+    if cand.get("kind") == "ladder":
+        cand_series = series_from_ladder(cand)
+        base_series = series_from_ladder(base)
+    else:
+        cand_series = series_from_locust(cand, _read_csv(cand_dir / "locust_stats.csv"))
+        base_series = series_from_locust(base, _read_csv(base_dir / "locust_stats.csv"))
+
+    comparison = build_comparison(cand, base, cand_series, base_series, args.threshold)
+    comparison["compatibility_problems"] = problems
+    (cand_dir / "comparison.json").write_text(
+        json.dumps(comparison, ensure_ascii=False, indent=2) + "\n")
+
+    print(f"对比：{comparison['candidate']['tag']} ← {comparison['baseline']['tag']}"
+          f"（阈值 {args.threshold:.0%}）")
+    for row in comparison["rows"]:
+        if row["status"] == "regressed":
+            for line in row["regressions"]:
+                print(f"  [FAIL] {row['key']}: {line}")
+            if row.get("note"):
+                print(f"         note: {row['note']}")
+        elif row["status"] in ("added", "removed"):
+            print(f"  [skip] {row['key']}: {row['note']}")
+    if comparison["verdict"] == "clean":
+        print(f"[ok] 无劣化项（共 {len(comparison['rows'])} 项对比）")
+    else:
+        print(f"[FAIL] {comparison['regressions']} 项劣化：{comparison['regressed_keys']}")
+    print(f"[ok] 对比结果写入 {_rel(cand_dir / 'comparison.json')}")
+    cmd_report(argparse.Namespace(archive=str(cand_dir)))
+    return 0 if comparison["verdict"] == "clean" else 1
+
+
 # ---------------------------------------------------------------- report
 
 # 调性沿用 docs/design-tone.md：冷灰炭底 + 琥珀作唯一强调色（这里琥珀只标
@@ -845,11 +1021,16 @@ def _normalize_name(name: str) -> str:
 
 
 def _aggregate_endpoints(rows: list[dict]) -> list[dict]:
-    """按归一化名称聚合；p95 取组内最大（保守口径，宁高不低）。"""
+    """按归一化名称聚合；p95 取组内最大（保守口径，宁高不低）。
+
+    排除 `warmup:*` 与 `Aggregated`：前者是 VU 启动期的一次性动作（登录 bcrypt
+    ~210ms），混进稳态统计会把聚合 p95 抬高、也会在回归对比里制造假劣化；
+    后者是 locust 自算的行，重复计入会翻倍。
+    """
     groups: dict[str, dict] = {}
     for row in rows:
         name = (row.get("Name") or "").strip()
-        if not name or name == "Aggregated":
+        if not name or name == "Aggregated" or name.startswith("warmup:"):
             continue
         key = _normalize_name(name)
         item = groups.setdefault(key, {"name": key, "requests": 0, "failures": 0,
@@ -884,17 +1065,59 @@ def _sparkline(points: list[float], color: str = _MUTED) -> str:
         f"text-anchor='end' font-family='monospace'>{hi:.0f}</text></svg>")
 
 
+def _render_comparison(comparison: dict) -> str:
+    """回归对比区块（spec §3.1）：p95 劣化 > 阈值即标出。"""
+    import html
+
+    esc = lambda v: html.escape(str(v), quote=True)  # noqa: E731
+    rows = comparison.get("rows") or []
+    if not rows:
+        return ""
+
+    def cell(value, invert=False):
+        if value is None:
+            return "<td>—</td>"
+        bad = (value > 0) if not invert else (value < 0)
+        mark = f"{value:+.1%}"
+        return f"<td>{mark}</td>" if not bad else f"<td>{mark} ⚠</td>"
+
+    body = "".join(
+        f"<tr class='{'fail' if row['status'] == 'regressed' else ''}'>"
+        f"<td>{esc(row['key'])}</td>"
+        + cell(row.get("p95_delta")) + cell(row.get("p99_delta"))
+        + cell(row.get("poll_p95_delta")) + cell(row.get("error_rate_delta"))
+        + cell(row.get("throughput_delta"), invert=True)
+        + f"<td>{esc(row['status'])}</td></tr>"
+        for row in rows)
+
+    note = ""
+    if comparison.get("compatibility_problems"):
+        note = ("<p class='sub'>⚠ 口径不一致（--force 对比）："
+                + esc("；".join(comparison["compatibility_problems"])) + "</p>")
+    verdict = ("无劣化项" if comparison.get("verdict") == "clean"
+               else f"{comparison.get('regressions')} 项劣化")
+    return (f"<h2>回归对比（{esc(comparison.get('baseline', {}).get('tag'))} → "
+            f"{esc(comparison.get('candidate', {}).get('tag'))}，阈值 "
+            f"{comparison.get('threshold', 0):.0%}）</h2>{note}"
+            "<table><thead><tr><th>档位 / 端点</th><th>p95 Δ</th><th>p99 Δ</th>"
+            "<th>轮询 p95 Δ</th><th>错误率 Δ</th><th>吞吐 Δ</th><th>判定</th></tr></thead>"
+            f"<tbody>{body}</tbody></table>"
+            f"<p class='sub'>结论：{esc(verdict)}</p>")
+
+
 def render_html(summary: dict, observations: dict, endpoint_rows: list[dict],
-                history_rows: list[dict], failures_rows: list[dict]) -> str:
+                history_rows: list[dict], failures_rows: list[dict],
+                comparison: dict | None = None) -> str:
     """归档 → 自包含 HTML。阶梯归档走 _render_ladder，单档走 _render_locust。"""
     if summary.get("kind") == "ladder":
-        return _render_ladder(summary, observations, {})
+        return _render_ladder(summary, observations, {}, comparison)
     return _render_locust(summary, observations, endpoint_rows, history_rows,
-                          failures_rows)
+                          failures_rows, comparison)
 
 
 def _render_locust(summary: dict, observations: dict, endpoint_rows: list[dict],
-                   history_rows: list[dict], failures_rows: list[dict]) -> str:
+                   history_rows: list[dict], failures_rows: list[dict],
+                   comparison: dict | None = None) -> str:
     """单档（Locust 闭环）归档的渲染。"""
     import html
 
@@ -1026,11 +1249,14 @@ def _render_locust(summary: dict, observations: dict, endpoint_rows: list[dict],
 <table><thead><tr><th>端点</th><th>错误</th><th>次数</th></tr></thead>
 <tbody>{failure_table or "<tr><td>—</td><td colspan='2'>无失败</td></tr>"}</tbody></table>
 
+{_render_comparison(comparison) if comparison else ''}
+
 <h2>归档元数据</h2><dl>{meta_rows}</dl>
 
 <h2>服务端观测项</h2><dl>{obs_rows}</dl>
 
-<p class="foot">口径：热/冷两档不可合并统计；本档位为
+<p class="foot">口径：热/冷两档不可合并统计；端点表已排除 warmup（VU 启动期一次性动作）
+与 locust 自算的 Aggregated 行；本档位为
 {esc(summary.get('vu'))} VU / {esc(summary.get('duration'))}，不可外推到更高并发或更大数据量。
 冷热两档在数据量不足以撑出缓存差异时读数会相同——那是数据规模的限制，不是缓存无所谓的证据。
 生成方式：<code>uv run python tests/performance/run_stress.py report</code>
@@ -1039,7 +1265,8 @@ def _render_locust(summary: dict, observations: dict, endpoint_rows: list[dict],
 """
 
 
-def _render_ladder(summary: dict, observations: dict, step_detail: dict) -> str:
+def _render_ladder(summary: dict, observations: dict, step_detail: dict,
+                   comparison: dict | None = None) -> str:
     """阶梯归档渲染：拐点结论 + 逐档表 + 校正延迟曲线（spec §3.5/§3.6）。"""
     import html
 
@@ -1181,9 +1408,12 @@ def _render_ladder(summary: dict, observations: dict, step_detail: dict) -> str:
 <th>p99</th></tr></thead>
 <tbody>{endpoint_table or "<tr><td>—</td><td colspan='5'>无数据</td></tr>"}</tbody></table>
 
+{_render_comparison(comparison) if comparison else ''}
+
 <h2>观测与偏差</h2><dl>{obs_rows}</dl>
 
-<p class="foot">口径：热/冷两档不可合并统计；校正延迟含排队等待，判定以它为准。
+<p class="foot">口径：热/冷两档不可合并统计；端点表已排除 warmup（VU 启动期一次性动作）
+与 locust 自算的 Aggregated 行；校正延迟含排队等待，判定以它为准。
 {'<strong>本次压测机与被测系统同机，资源观测不可作为容量依据</strong>；'
  '生产级判定需把生成器放到独立机器并确认其 CPU 余量。' if gen_ctx.get('co_located_with_sut') else ''}
 生成方式：<code>uv run python tests/performance/run_stress.py ladder ...</code>
@@ -1206,6 +1436,10 @@ def cmd_report(args) -> int:
             print(f"[skip] {_rel(archive)} 无 summary.json")
             continue
         summary = json.loads(summary_path.read_text())
+        comparison = None
+        cmp_path = archive / "comparison.json"
+        if cmp_path.exists():
+            comparison = json.loads(cmp_path.read_text())
         if summary.get("kind") == "ladder":
             steps = summary.get("steps") or []
             detail = {}
@@ -1217,7 +1451,7 @@ def cmd_report(args) -> int:
             obs_files = sorted(archive.glob("observations-step-*.json"))
             if obs_files:
                 obs = json.loads(obs_files[-1].read_text())
-            html_text = _render_ladder(summary, obs, detail)
+            html_text = _render_ladder(summary, obs, detail, comparison)
         else:
             observations = {}
             obs_path = archive / "observations.json"
@@ -1227,7 +1461,7 @@ def cmd_report(args) -> int:
                 summary, observations,
                 _read_csv(archive / "locust_stats.csv"),
                 _read_csv(archive / "locust_stats_history.csv"),
-                _read_csv(archive / "locust_failures.csv"))
+                _read_csv(archive / "locust_failures.csv"), comparison)
         out = archive / "report.html"
         out.write_text(html_text)
         written.append(out)
@@ -1247,11 +1481,6 @@ def cmd_report(args) -> int:
 
 
 # ---------------------------------------------------------------- entry
-
-def _pending(name: str) -> int:
-    print(f"[skip] `{name}` 属 spec P1，未实现——不做静默空跑")
-    return 2
-
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="stress-test single entry")
@@ -1320,8 +1549,13 @@ def main(argv: list[str]) -> int:
     ladder.add_argument("--allow-non-fixture", action="store_true")
     ladder.add_argument("--allow-derived-pool", action="store_true")
     ladder.set_defaults(func=cmd_ladder)
-    compare = sub.add_parser("compare", help="与基线对比（P1）")
-    compare.set_defaults(func=lambda a: _pending("compare"))
+    compare = sub.add_parser("compare", help="与基线对比，标记 p95 劣化（默认阈值 0.30 = 30%%）")
+    compare.add_argument("--candidate", required=True, help="本次归档目录")
+    compare.add_argument("--baseline", required=True, help="基线归档目录")
+    compare.add_argument("--threshold", type=float, default=0.30)
+    compare.add_argument("--force", action="store_true",
+                         help="口径不一致时仍强行对比（归档会标注）")
+    compare.set_defaults(func=cmd_compare)
 
     args = parser.parse_args(argv)
     return args.func(args)
