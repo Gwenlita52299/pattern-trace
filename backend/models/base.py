@@ -250,6 +250,9 @@ class Judgment(Base):
     risk_level = Column(String(20))     # high | medium | low（#72 删 no_match；历史行保留旧值）
     matched_pattern_id = Column(String(36))
     matched_pattern_name = Column(String(120))
+    # issue #75：判定当时实际使用的模式版本——模式被编辑/回滚后，
+    # 历史判定仍能定位到当时那一版的内容与索引口径
+    matched_pattern_revision = Column(Integer)
     confidence = Column(Float)
     evidence = Column(JSONB)            # list[str]：addr:/tx:/edge: 前缀 ID
     reasoning = Column(Text)

@@ -10,8 +10,10 @@ import uuid
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Column,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -58,8 +60,73 @@ class Pattern(Base):
     embedding_dim = Column(Integer)
     wl_fingerprint = Column(JSONB)
     content_hash = Column(String(64), nullable=False)
+
+    # issue #75：生命周期——本行**始终代表当前生效版本**（生效版本的概念
+    # 只在审核通过时前移），未审核的改动存在 pattern_revisions 里。
+    revision = Column(Integer, default=1, nullable=False)
+    # draft | active | deprecated（只有 active 参与召回）
+    status = Column(String(20), default="active", nullable=False, index=True)
+    # pending | indexed | failed（内容变化后异步重算索引）
+    index_status = Column(String(20), default="indexed", nullable=False)
+    last_editor_id = Column(String(36))
+    reviewed_by = Column(String(36))
+    reviewed_at = Column(DateTime(timezone=True))
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PatternRevision(Base):
+    """模式版本历史（issue #75）：**只 INSERT，不 UPDATE/DELETE**。
+
+    每行是一个完整版本快照：内容字段 + 索引元数据（向量/指纹/模型口径）。
+    编辑（origin=edit）与回滚（origin=rollback）都产生新行，历史链因此
+    不可篡改；`patterns` 当前行只在审核通过时被 COW 覆盖。
+
+    status 语义：draft(待审核) | active(曾被发布) | rejected(审核驳回)。
+    """
+    __tablename__ = "pattern_revisions"
+    __table_args__ = (
+        UniqueConstraint("pattern_id", "revision",
+                         name="uq_pattern_revisions_pattern_rev"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    pattern_id = Column(String(36), ForeignKey("patterns.id",
+                                               ondelete="CASCADE"),
+                        nullable=False, index=True)
+    revision = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False)
+    origin = Column(String(20), nullable=False)   # ingest | edit | rollback
+
+    # 内容快照
+    name = Column(String(120), nullable=False)
+    source = Column(String(40), nullable=False)
+    provenance = Column(String(20), nullable=False)
+    evidence_grade = Column(String(1), nullable=False)
+    description = Column(Text)
+    canonical_subgraph = Column(JSONB, nullable=False)
+    content_hash = Column(String(64), nullable=False)
+
+    # 索引元数据（与 patterns 同口径，供审核通过后整体 COW）
+    structural_features = Column(Vector(20))
+    semantic_embedding = Column(Vector(1024))
+    graphormer_embedding = Column(Vector(784))
+    graphormer_model_id = Column(String(120))
+    retrieval_fingerprint = Column(JSONB)
+    wl_fingerprint = Column(JSONB)
+    embedding_model = Column(String(100), default="", nullable=False)
+    embedding_dim = Column(Integer)
+    index_status = Column(String(20), default="pending", nullable=False)
+    index_error = Column(Text)
+    index_metadata = Column(JSONB)
+
+    change_note = Column(Text)
+    reviewed_by = Column(String(36))
+    reviewed_at = Column(DateTime(timezone=True))
+    created_by = Column(String(36))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        nullable=False)
 
 
 class PatternNegative(Base):
