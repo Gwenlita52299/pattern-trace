@@ -98,6 +98,9 @@ curl -f http://localhost:8000/healthz
   （劣化可能来自代码变更或环境噪声，先复跑一次排除噪声）
 - 归档目录必须自描述：`summary.json` 记录硬件档位、profile、VU 阶梯、数据规模（judgments/cases 行数）、
   provider 配置与守卫结果——**没有这些元数据的 CSV 不可作为基线**
+- `run_stress.py report` 把归档渲染成**自包含** HTML（内联样式、无 JS、无外部资源）：达标判定、
+  端点明细（按归一化路径聚合）、稳态期趋势、归档元数据与服务端观测项；`output/stress/index.html`
+  汇总全部归档。报告是给人看的视图，**判定仍以 CSV 与 summary.json 为准**
 
 ### 3.2 成功与失败的判定（不可只看 5xx）
 
@@ -297,12 +300,12 @@ curl -f http://localhost:8000/healthz
 
 | 文件 | 职责 |
 |---|---|
-| `tests/performance/run_stress.py` | **单一入口**：`guard`（环境守卫）/ `pool`（分层抽样池）/ `baseline`（跑档 + 采集观测 + 归档）/ `ladder`（P1）/ `compare`（P1）/ `cleanup` |
+| `tests/performance/run_stress.py` | **单一入口**：`guard`（环境守卫）/ `pool`（分层抽样池）/ `baseline`（跑档 + 采集观测 + 归档）/ `report`（归档渲染为自包含 HTML）/ `ladder`（P1）/ `compare`（P1）/ `cleanup` |
 | `tests/performance/pool.py` | 池文件的读写与抽样的纯函数（不依赖 locust，便于单测） |
 | `tests/performance/seed_volume.py` | 幂等灌数：万级 judgments（合成地址 + 真实体积快照）+ 百级 cases；`--cleanup` 清理 |
 | `tests/performance/locustfile.py` | `read`/`mixed`/`anon`（P0）+ `queue-analysis`/`queue-report`/`queue-index`/`failure`（P1/P2），`STRESS_ID_POOL_FILE` 读池，按 §3.2 判定成功/失败 |
 | `tests/performance/perf_phase6.py` | 进程内基准 PERF-01/02（与 HTTP 压测互补，口径不可混用） |
-| `output/stress/<YYYYMMDD>-<tag>/` | 归档：locust CSV + `observations/` + `summary.json`（**归档物必须自描述**，§3.1） |
+| `output/stress/<YYYYMMDD>-<tag>/` | 归档：locust CSV + `observations.json` + `summary.json` + `report.html`（**归档物必须自描述**，§3.1） |
 
 ## 6. 验收标准
 

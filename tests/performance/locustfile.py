@@ -199,6 +199,7 @@ class StressUser(HttpUser):
         if not addrs:
             return
         with self.client.get(f"/api/v1/addresses/{random.choice(addrs)}/subgraph",
+                             name="GET /api/v1/addresses/[addr]/subgraph",
                              catch_response=True) as r:
             _expect(r, ("nodes",))
 
@@ -207,6 +208,7 @@ class StressUser(HttpUser):
         if PROFILE not in ("read", "mixed"):
             return
         with self.client.get("/api/v1/cases", params={"page": random.randint(1, 5)},
+                             name="GET /api/v1/cases",
                              catch_response=True) as r:
             _expect(r, ("items",))
 

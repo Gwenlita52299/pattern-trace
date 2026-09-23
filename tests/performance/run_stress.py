@@ -380,6 +380,329 @@ def cmd_cleanup(args) -> int:
     return subprocess.run(cmd, cwd=ROOT).returncode
 
 
+# ---------------------------------------------------------------- report
+
+# 调性沿用 docs/design-tone.md：冷灰炭底 + 琥珀作唯一强调色（这里琥珀只标
+# 「需要看的东西」= 未达标项），数字全部等宽，禁止红色警报横幅与发光。
+_REPORT_CSS = """
+:root {
+  --bg: #0e1116; --panel: #141920; --panel-2: #181f28;
+  --line: rgba(255,255,255,.07); --ink: #e6e9ef; --muted: #8b93a1;
+  --amber: #f0b429; --amber-hi: #ffd166;
+  --font-ui: -apple-system, "SF Pro Display", "PingFang SC", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 40px 32px 64px; background: var(--bg); color: var(--ink);
+  font-family: var(--font-ui); font-size: 14px; line-height: 1.55; }
+.wrap { max-width: 1080px; margin: 0 auto; }
+h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; letter-spacing: .01em; }
+h2 { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .08em; margin: 36px 0 12px; }
+.sub { color: var(--muted); font-family: var(--font-mono); font-size: 12px; }
+.verdict { display: flex; align-items: baseline; gap: 12px; margin: 20px 0 8px;
+  padding: 14px 16px; background: var(--panel); border: 1px solid var(--line);
+  border-left: 3px solid var(--muted); border-radius: 3px; }
+.verdict.bad { border-left-color: var(--amber); }
+.verdict .tag { font-size: 12px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); }
+.verdict.bad .tag { color: var(--amber); }
+.verdict .note { color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin-top: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+  padding: 12px 14px; }
+.card .k { color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; }
+.card .v { font-family: var(--font-mono); font-size: 20px; margin-top: 6px; }
+.card.flag .v { color: var(--amber); }
+table { width: 100%; border-collapse: collapse; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 3px; }
+th, td { padding: 8px 12px; text-align: right; border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px;
+  letter-spacing: .05em; }
+th:first-child, td:first-child { text-align: left; font-family: var(--font-ui); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--panel-2); }
+.fail td { color: var(--amber); }
+dl { display: grid; grid-template-columns: 200px 1fr; gap: 6px 16px; margin: 0;
+  font-family: var(--font-mono); font-size: 12px; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+  padding: 12px 14px; overflow-x: auto; font-family: var(--font-mono); font-size: 11px;
+  color: var(--muted); margin: 0; }
+.spark { display: flex; gap: 24px; flex-wrap: wrap; }
+.spark figure { margin: 0; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 3px; padding: 12px 14px; }
+.spark figcaption { color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; margin-bottom: 6px; }
+.foot { color: var(--muted); font-size: 12px; margin-top: 40px; padding-top: 16px;
+  border-top: 1px solid var(--line); }
+a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
+a:hover { border-bottom-color: var(--amber); }
+"""
+
+_AMBER = "#f0b429"
+_MUTED = "#8b93a1"
+
+
+def _read_csv(path: Path) -> list[dict]:
+    import csv
+
+    if not path.exists():
+        return []
+    with path.open() as handle:
+        return list(csv.DictReader(handle))
+
+
+def _num(value, default=0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_name(name: str) -> str:
+    """把逐地址/逐页的请求名归并，避免报告里出现上千行。
+
+    旧归档的 locustfile 未给 subgraph 起稳定名（每个地址一行），这里兜底归并；
+    新档已用 `name=` 固定，归并是幂等的。
+    """
+    import re
+
+    name = re.sub(r"/addresses/[^/]+/subgraph", "/addresses/[addr]/subgraph", name)
+    name = re.sub(r"(cases\?page=)\d+", r"\1N", name)
+    name = re.sub(r"/judgments/[0-9a-f-]{36}", "/judgments/[id]", name)
+    return name
+
+
+def _aggregate_endpoints(rows: list[dict]) -> list[dict]:
+    """按归一化名称聚合；p95 取组内最大（保守口径，宁高不低）。"""
+    groups: dict[str, dict] = {}
+    for row in rows:
+        name = (row.get("Name") or "").strip()
+        if not name or name == "Aggregated":
+            continue
+        key = _normalize_name(name)
+        item = groups.setdefault(key, {"name": key, "requests": 0, "failures": 0,
+                                       "p95": 0.0, "max": 0.0, "rps": 0.0})
+        item["requests"] += int(_num(row.get("Request Count")))
+        item["failures"] += int(_num(row.get("Failure Count")))
+        item["p95"] = max(item["p95"], _num(row.get("95%")))
+        item["max"] = max(item["max"], _num(row.get("Max Response Time")))
+        item["rps"] += _num(row.get("Requests/s"))
+    return sorted(groups.values(), key=lambda i: -i["requests"])
+
+
+def _sparkline(points: list[float], color: str = _MUTED) -> str:
+    """内联 SVG 折线（无 JS、无外部资源）：压测期间的趋势用一眼扫过就够。"""
+    if len(points) < 2:
+        return "<span class='sub'>（无历史采样）</span>"
+    width, height, pad = 320, 56, 4
+    lo, hi = min(points), max(points)
+    span = (hi - lo) or 1.0
+    step = (width - 2 * pad) / (len(points) - 1)
+    coords = " ".join(
+        f"{pad + i * step:.1f},{height - pad - (v - lo) / span * (height - 2 * pad):.1f}"
+        for i, v in enumerate(points))
+    return (
+        f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' "
+        f"role='img' aria-label='trend'>"
+        f"<polyline points='{coords}' fill='none' stroke='{color}' stroke-width='1.5'/>"
+        f"<text x='{pad}' y='{height - 1}' fill='{_MUTED}' font-size='9' "
+        f"font-family='monospace'>{lo:.0f}</text>"
+        f"<text x='{width - pad}' y='{height - 1}' fill='{_MUTED}' font-size='9' "
+        f"text-anchor='end' font-family='monospace'>{hi:.0f}</text></svg>")
+
+
+def render_html(summary: dict, observations: dict, endpoint_rows: list[dict],
+                history_rows: list[dict], failures_rows: list[dict]) -> str:
+    """把归档渲染成自包含 HTML（纯函数，便于单测）。"""
+    import html
+
+    esc = lambda v: html.escape(str(v), quote=True)  # noqa: E731
+    locust = summary.get("locust") or {}
+    tier = summary.get("pool_tier", "?")
+    poll = next((v for k, v in (locust.get("by_name") or {}).items()
+                 if "judgments" in k), {})
+    error_rate = locust.get("error_rate")
+    poll_p95 = poll.get("p95_ms")
+
+    checks: list[tuple[str, bool, str]] = []
+    if error_rate is not None:
+        checks.append(("错误率 < 1%", error_rate < 0.01, f"{error_rate:.2%}"))
+    if tier == "hot" and poll_p95 is not None:
+        checks.append(("热档轮询 p95 ≤ 300ms", poll_p95 <= 300, f"{poll_p95}ms"))
+    if summary.get("pool_usable_as_baseline") is not None:
+        checks.append(("池满足基线口径（热/冷均非空）",
+                       bool(summary["pool_usable_as_baseline"]),
+                       "usable" if summary["pool_usable_as_baseline"] else "degraded"))
+    bad = [name for name, ok, _ in checks if not ok]
+
+    def card(label, value, flag=False):
+        return (f"<div class='card{' flag' if flag else ''}'>"
+                f"<div class='k'>{esc(label)}</div>"
+                f"<div class='v'>{esc(value)}</div></div>")
+
+    cards = "".join([
+        card("总请求", locust.get("total_requests", 0)),
+        card("失败", locust.get("total_failures", 0),
+             bool(locust.get("total_failures"))),
+        card("错误率", "n/a" if error_rate is None else f"{error_rate:.2%}",
+             error_rate is not None and error_rate >= 0.01),
+        card("聚合 p95", "n/a" if locust.get("p95_ms") is None
+             else f"{locust['p95_ms']}ms"),
+        card(f"轮询 p95 ({tier})", "n/a" if poll_p95 is None else f"{poll_p95}ms",
+             tier == "hot" and poll_p95 is not None and poll_p95 > 300),
+        card("并发 / 时长", f"{summary.get('vu', '?')} VU / {summary.get('duration', '?')}"),
+    ])
+
+    check_rows = "".join(
+        f"<tr class='{'' if ok else 'fail'}'><td>{esc(name)}</td>"
+        f"<td>{'✓ 达标' if ok else '⚠ 未达标'}</td><td>{esc(detail)}</td></tr>"
+        for name, ok, detail in checks)
+
+    endpoint_table = "".join(
+        f"<tr class='{'fail' if item['failures'] else ''}'>"
+        f"<td>{esc(item['name'])}</td><td>{item['requests']}</td>"
+        f"<td>{item['failures']}</td><td>{item['p95']:.0f}</td>"
+        f"<td>{item['max']:.0f}</td><td>{item['rps']:.1f}</td></tr>"
+        for item in _aggregate_endpoints(endpoint_rows))
+
+    failure_table = "".join(
+        f"<tr class='fail'><td>{esc(row.get('Name'))}</td>"
+        f"<td>{esc(row.get('Error'))}</td><td>{esc(row.get('Occurrences'))}</td></tr>"
+        for row in failures_rows)
+
+    rps_series = [_num(r.get("Requests/s")) for r in history_rows
+                  if (r.get("Name") or "") == "Aggregated"]
+    p95_series = [_num(r.get("95%")) for r in history_rows
+                  if (r.get("Name") or "") == "Aggregated"
+                  and (r.get("95%") or "N/A") != "N/A"]
+
+    meta = summary.get("pool_meta") or {}
+    scale = meta.get("scale") or {}
+    obs = observations or {}
+    meta_rows = "".join(
+        f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in [
+            ("tag", summary.get("tag")),
+            ("profile / tier", f"{summary.get('profile')} / {tier}"),
+            ("host", summary.get("host")),
+            ("started_at", summary.get("started_at")),
+            ("git_sha", summary.get("git_sha")),
+            ("环境守卫", summary.get("guard")),
+            ("mock_scenario", summary.get("mock_scenario") or "—"),
+            ("硬件", summary.get("hardware")),
+            ("数据规模", scale or "—"),
+            ("池规模", meta.get("sizes") or "—"),
+            ("池来源", summary.get("pool_origin")),
+            ("观测项文件", summary.get("observations_file")),
+        ] if v not in (None, ""))
+
+    obs_rows = "".join(
+        f"<dt>{esc(k)}</dt><dd>{esc(v)}</dd>" for k, v in [
+            ("队列深度", obs.get("queues")),
+            ("analysis_spans", obs.get("analysis_spans")),
+            ("PG 连接数", obs.get("pg_activity")),
+            ("PG 等待事件", obs.get("pg_wait_events")),
+            ("Redis clients", (obs.get("redis_clients") or "").splitlines()[:6]),
+            ("docker stats", (obs.get("docker_stats") or "").splitlines()),
+        ] if v not in (None, "", []))
+
+    verdict_class = "bad" if bad else ""
+    verdict_tag = "⚠ 存在未达标项" if bad else "✓ 全部达标"
+    verdict_note = ("需调查：" + "；".join(bad)) if bad else "本档位未见未达标项"
+
+    return f"""<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>压测报告 · {esc(summary.get('tag'))}</title>
+<style>{_REPORT_CSS}</style></head>
+<body><div class="wrap">
+<h1>压测报告 · {esc(summary.get('tag'))}</h1>
+<div class="sub">{esc(summary.get('profile'))} / {esc(tier)} · {esc(summary.get('started_at'))}
+ · git {esc(summary.get('git_sha'))}</div>
+
+<div class="verdict {verdict_class}"><span class="tag">{verdict_tag}</span>
+  <span class="note">{esc(verdict_note)}</span></div>
+
+<div class="cards">{cards}</div>
+
+<h2>达标判定</h2>
+<table><thead><tr><th>口径</th><th>结果</th><th>实测</th></tr></thead>
+<tbody>{check_rows or "<tr><td>—</td><td>—</td><td>无可判定项</td></tr>"}</tbody></table>
+
+<h2>趋势（稳态期）</h2>
+<div class="spark">
+  <figure><figcaption>Requests/s</figcaption>{_sparkline(rps_series, _AMBER)}</figure>
+  <figure><figcaption>p95 (ms)</figcaption>{_sparkline(p95_series, _MUTED)}</figure>
+</div>
+
+<h2>端点明细（按归一化路径聚合，p95 取组内最大）</h2>
+<table><thead><tr><th>端点</th><th>请求</th><th>失败</th><th>p95 (ms)</th>
+<th>max (ms)</th><th>req/s</th></tr></thead>
+<tbody>{endpoint_table or "<tr><td>—</td><td colspan='5'>无数据</td></tr>"}</tbody></table>
+
+<h2>失败明细</h2>
+<table><thead><tr><th>端点</th><th>错误</th><th>次数</th></tr></thead>
+<tbody>{failure_table or "<tr><td>—</td><td colspan='2'>无失败</td></tr>"}</tbody></table>
+
+<h2>归档元数据</h2><dl>{meta_rows}</dl>
+
+<h2>服务端观测项</h2><dl>{obs_rows}</dl>
+
+<p class="foot">口径：热/冷两档不可合并统计；本档位为
+{esc(summary.get('vu'))} VU / {esc(summary.get('duration'))}，不可外推到更高并发或更大数据量。
+冷热两档在数据量不足以撑出缓存差异时读数会相同——那是数据规模的限制，不是缓存无所谓的证据。
+生成方式：<code>uv run python tests/performance/run_stress.py report</code>
+</p>
+</div></body></html>
+"""
+
+
+def cmd_report(args) -> int:
+    archives = ([Path(args.archive)] if args.archive
+                else sorted(p for p in OUTPUT_ROOT.iterdir()
+                            if p.is_dir() and (p / "summary.json").exists()))
+    if not archives:
+        print("[FAIL] 没有可渲染的归档（先跑 baseline）")
+        return 1
+    written = []
+    for archive in archives:
+        summary_path = archive / "summary.json"
+        if not summary_path.exists():
+            print(f"[skip] {_rel(archive)} 无 summary.json")
+            continue
+        summary = json.loads(summary_path.read_text())
+        observations = {}
+        obs_path = archive / "observations.json"
+        if obs_path.exists():
+            observations = json.loads(obs_path.read_text())
+        html_text = render_html(
+            summary, observations,
+            _read_csv(archive / "locust_stats.csv"),
+            _read_csv(archive / "locust_stats_history.csv"),
+            _read_csv(archive / "locust_failures.csv"))
+        out = archive / "report.html"
+        out.write_text(html_text)
+        written.append(out)
+        print(f"[ok] {_rel(out)}")
+    if len(written) > 1 and not args.archive:
+        links = "\n".join(
+            f'<li><a href="{p.parent.name}/report.html">{p.parent.name}</a></li>'
+            for p in written)
+        index = OUTPUT_ROOT / "index.html"
+        index.write_text(
+            "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
+            "<title>压测归档</title><style>" + _REPORT_CSS + "</style></head>"
+            "<body><div class='wrap'><h1>压测归档</h1>"
+            f"<ul>{links}</ul></div></body></html>")
+        print(f"[ok] {_rel(index)}")
+    return 0
+
+
 # ---------------------------------------------------------------- entry
 
 def _pending(name: str) -> int:
@@ -424,6 +747,11 @@ def main(argv: list[str]) -> int:
 
     c = sub.add_parser("cleanup", help="清理 STRESS 命名空间压测数据")
     c.set_defaults(func=cmd_cleanup)
+
+    r = sub.add_parser("report", help="把归档渲染成自包含 HTML")
+    r.add_argument("--archive", default=None,
+                   help="指定归档目录；缺省渲染 output/stress 下全部归档并生成 index.html")
+    r.set_defaults(func=cmd_report)
 
     ladder = sub.add_parser("ladder", help="VU 阶梯（P1）")
     ladder.set_defaults(func=lambda a: _pending("ladder"))
