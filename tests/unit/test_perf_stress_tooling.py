@@ -267,6 +267,105 @@ def test_backend_cpu_pct_parses_docker_stats():
     assert m["server_cpu_pct"] == 5.66
 
 
+# ------------------------------------------------------------ 回归对比
+
+def _ladder_summary(tag, steps):
+    return {"kind": "ladder", "tag": tag, "profile": "ladder(hot)",
+            "pool_tier": "hot", "hardware": {"cpu_count": 10},
+            "pool_meta": {"scale": {"judgments_total": 10501}}, "steps": steps}
+
+
+def _lstep(rate, p95, p99=None, err=0.0, achieved=None, ok=True):
+    return {"target_rps": rate, "p95_corrected_ms": p95,
+            "p99_corrected_ms": p99 if p99 is not None else p95 * 1.2,
+            "poll_p95_corrected_ms": p95, "error_rate": err,
+            "achieved_rps": achieved if achieved is not None else rate,
+            "knee_trustworthy": ok, "invalid_generator_bound": not ok}
+
+
+def test_series_from_ladder():
+    series = run_stress.series_from_ladder(_ladder_summary("t", [
+        _lstep(100, 90.0), _lstep(200, 140.0)]))
+    assert set(series) == {"100 RPS", "200 RPS"}
+    assert series["200 RPS"]["p95"] == 140.0
+    assert series["200 RPS"]["trustworthy"] is True
+
+
+def test_compatibility_rejects_mismatched_runs():
+    base = _ladder_summary("base", [_lstep(100, 90.0)])
+    assert run_stress.compatibility(base, base) == []
+
+    other_kind = {"kind": "locust", "tag": "x", "profile": "read", "pool_tier": "hot"}
+    assert any("归档类型" in p for p in run_stress.compatibility(other_kind, base))
+
+    other_tier = _ladder_summary("t2", [_lstep(100, 90.0)])
+    other_tier["pool_tier"] = "cold"
+    assert any("池档位" in p for p in run_stress.compatibility(other_tier, base))
+
+    other_scale = _ladder_summary("t3", [_lstep(100, 90.0)])
+    other_scale["pool_meta"] = {"scale": {"judgments_total": 100000}}
+    assert any("数据规模" in p for p in run_stress.compatibility(other_scale, base))
+
+    other_cpu = _ladder_summary("t4", [_lstep(100, 90.0)])
+    other_cpu["hardware"] = {"cpu_count": 4}
+    assert any("硬件核数" in p for p in run_stress.compatibility(other_cpu, base))
+
+
+def test_build_comparison_self_compare_is_clean():
+    """spec 验收：同一份自比必须报 0%（否则回归门禁会假报警）。"""
+    summary = _ladder_summary("t", [_lstep(100, 90.0), _lstep(200, 140.0, err=0.002)])
+    series = run_stress.series_from_ladder(summary)
+    comparison = run_stress.build_comparison(summary, summary, series, series)
+    assert comparison["verdict"] == "clean"
+    assert comparison["regressions"] == 0
+    assert all(row.get("p95_delta") in (0.0, None) for row in comparison["rows"])
+
+
+def test_build_comparison_flags_regressions():
+    base = _ladder_summary("base", [_lstep(100, 100.0, err=0.0, achieved=100.0)])
+    cand = _ladder_summary("cand", [_lstep(100, 140.0, err=0.02, achieved=70.0)])
+    comparison = run_stress.build_comparison(
+        cand, base, run_stress.series_from_ladder(cand),
+        run_stress.series_from_ladder(base))
+    assert comparison["verdict"] == "regressed"
+    reasons = " ".join(comparison["rows"][0]["regressions"])
+    assert "p95 劣化 +40.0%" in reasons          # >30% 阈值
+    assert "错误率上升" in reasons
+    assert "吞吐下降" in reasons
+
+
+def test_build_comparison_handles_added_removed_and_untrusted():
+    base = _ladder_summary("base", [_lstep(100, 100.0), _lstep(200, 150.0)])
+    cand = _ladder_summary("cand", [_lstep(100, 150.0), _lstep(300, 200.0)])
+    comparison = run_stress.build_comparison(
+        cand, base, run_stress.series_from_ladder(cand),
+        run_stress.series_from_ladder(base))
+    by_key = {row["key"]: row for row in comparison["rows"]}
+    assert by_key["300 RPS"]["status"] == "added"
+    assert by_key["200 RPS"]["status"] == "removed"
+
+    # 数据本身无效的档位：仍列出劣化，但必须带 note 提示不可当真
+    base = _ladder_summary("base", [_lstep(100, 100.0)])
+    cand = _ladder_summary("cand", [_lstep(100, 300.0, ok=False)])
+    comparison = run_stress.build_comparison(
+        cand, base, run_stress.series_from_ladder(cand),
+        run_stress.series_from_ladder(base))
+    row = comparison["rows"][0]
+    assert row["status"] == "regressed" and row["trustworthy"] is False
+    assert "数据本身无效" in row["note"]
+
+
+def test_aggregate_endpoints_excludes_warmup_and_locust_aggregate():
+    rows = [
+        {"Name": "warmup:login", "Request Count": "10", "Failure Count": "0",
+         "95%": "210", "99%": "210", "Max Response Time": "220", "Requests/s": "0.1"},
+        {"Name": "GET /api/v1/cases", "Request Count": "5", "Failure Count": "0",
+         "95%": "12", "99%": "12", "Max Response Time": "13", "Requests/s": "0.1"},
+    ]
+    names = {i["name"] for i in run_stress._aggregate_endpoints(rows)}
+    assert names == {"GET /api/v1/cases"}
+
+
 def test_step_metrics_extracts_without_judging():
     m = run_stress._step_metrics({
         "config": {"rate": 50.0},
