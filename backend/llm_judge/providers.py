@@ -10,8 +10,10 @@ issue #76 重构：具体类只负责"怎么调用上游"；注册（registry）
 统一提供——新增 provider 只需实现 complete() + 声明 CAPABILITIES + 注册。
 
 Mock provider 是端到端测试的关键：不依赖公网或本地 Ollama 即可跑通
-完整判断链路，scenario 由环境变量 LLM_MOCK_SCENARIO 控制。它是测试替身，
-**不套统一包装**（避免重试/闸门干扰脚本化场景与 test 直接注入属性）。
+完整判断链路，scenario 由环境变量 LLM_MOCK_SCENARIO 控制，
+每次调用前的固定延迟由 LLM_MOCK_DELAY_MS 控制（压测注入受控延迟用）。
+它是测试替身，**不套统一包装**（避免重试/闸门干扰脚本化场景与 test
+直接注入属性）。
 """
 from __future__ import annotations
 
@@ -481,8 +483,12 @@ def _register_llm_providers() -> None:
                             model=settings.llm_model, **kw)
 
     def _mock(settings, **kw):
+        # LLM_MOCK_DELAY_MS：压测 W1 专线用受控延迟把队列堆积拉到可观测区间
+        # （stress-test-spec §2.4）。仅 mock 生效，真实 provider 不受影响。
+        delay_ms = int(os.environ.get("LLM_MOCK_DELAY_MS", "0") or 0)
         return MockLLMClient(
-            scenario=os.environ.get("LLM_MOCK_SCENARIO", "valid_high"), **kw)
+            scenario=os.environ.get("LLM_MOCK_SCENARIO", "valid_high"),
+            fixed_delay_ms=delay_ms, **kw)
 
     for name, factory, cls, wrap in (
             ("openai", _openai, OpenAIClient, True),
