@@ -121,8 +121,12 @@ curl -f http://localhost:8000/healthz
 
 - **首轮**：产出基线，`run_stress.py baseline` 将 locust CSV、观测项与 `summary.json` 一并归档至
   `output/stress/<YYYYMMDD>-<tag>/`（`<tag>` 如 `dev-L1-read`），作为后续回归的对照物
-- **回归轮**：`run_stress.py compare --baseline <dir>` 与同硬件档位基线对比，**p95 劣化 > 30%** 输出劣化清单并非 0 退出
+- **回归轮**：`run_stress.py compare --candidate <dir> --baseline <dir>` 与同硬件档位基线对比，
+  **p95 劣化 > 30%**（或错误率上升 / 吞吐下降 > 30%）输出劣化清单并非 0 退出
   （劣化可能来自代码变更或环境噪声，先复跑一次排除噪声）
+- **对比前先校验口径**：归档类型（ladder/locust）、profile、池档位、数据规模、硬件核数任一不同即拒绝对比
+  （退出码 2），确要对比需 `--force` 并在归档标注——口径不同的两次运行比较只会产出假结论
+- 对比结果写入候选归档 `comparison.json`，并渲染进 `report.html`；**自校验**：同一份归档自比必须报 0% 劣化
 - 归档目录必须自描述：`summary.json` 记录硬件档位、profile、VU 阶梯、数据规模（judgments/cases 行数）、
   provider 配置与守卫结果——**没有这些元数据的 CSV 不可作为基线**
 - `run_stress.py report` 把归档渲染成**自包含** HTML（内联样式、无 JS、无外部资源）：达标判定、
@@ -365,12 +369,13 @@ curl -f http://localhost:8000/healthz
 
 | 文件 | 职责 |
 |---|---|
-| `tests/performance/run_stress.py` | **单一入口**：`guard`（环境守卫）/ `pool`（分层抽样池）/ `baseline`（跑档 + 采集观测 + 归档）/ `report`（归档渲染为自包含 HTML）/ `ladder`（P1）/ `compare`（P1）/ `cleanup` |
+| `tests/performance/run_stress.py` | **单一入口**：`guard` / `pool` / `baseline` / `ladder`（开放模型阶梯）/ `compare`（回归对比）/ `report`（自包含 HTML）/ `cleanup` |
+| `tests/performance/loadgen.py` | 开放模型生成器（固定到达率、多进程、CO 校正延迟、分位数） |
 | `tests/performance/pool.py` | 池文件的读写与抽样的纯函数（不依赖 locust，便于单测） |
 | `tests/performance/seed_volume.py` | 幂等灌数：万级 judgments（合成地址 + 真实体积快照）+ 百级 cases；`--cleanup` 清理 |
 | `tests/performance/locustfile.py` | `read`/`mixed`/`anon`（P0）+ `queue-analysis`/`queue-report`/`queue-index`/`failure`（P1/P2），`STRESS_ID_POOL_FILE` 读池，按 §3.2 判定成功/失败 |
 | `tests/performance/perf_phase6.py` | 进程内基准 PERF-01/02（与 HTTP 压测互补，口径不可混用） |
-| `output/stress/<YYYYMMDD>-<tag>/` | 归档：locust CSV + `observations.json` + `summary.json` + `report.html`（**归档物必须自描述**，§3.1） |
+| `output/stress/<YYYYMMDD>-<tag>/` | 归档：locust CSV / `step-*.json` + `observations*.json` + `summary.json` + `comparison.json` + `report.html`（**归档物必须自描述**，§3.1） |
 
 ## 6. 验收标准
 
@@ -408,7 +413,9 @@ curl -f http://localhost:8000/healthz
 - [x] 延迟口径双轨（工具 / 校正）落地，报告并列展示 coordinated-omission 幅度
 - [x] 拐点判定收敛到单一决策点，四态结论（meets / below / environment_limited / indeterminate）
 - [x] 压测机余量进判定：生成器 CPU ≥ 60% 的档位判为数据无效并排除在拐点之外
-- [ ] `run_stress.py compare` 与基线对比输出劣化清单（自校验：同一份 CSV 自比应报 0%）
+- [x] `run_stress.py compare` 与基线对比输出劣化清单（自校验：同一份归档自比报 0%，
+      实测 ladder/locust 两类归档均 0%）；口径不一致（跨类型、冷热档位不同）拒绝对比并退出 2；
+      合成劣化归档（p95 ×1.8）实测被逐项标出并非 0 退出
 - [ ] STRESS-01/02 达标项（错误率、热档 p95、队列 60s 回落）全绿
 - [ ] STRESS-03 预期拒绝不计入错误率 + mock_scenario 失败路径无 5xx
 - [ ] W1 分析队列专线（`LLM_MOCK_DELAY_MS`）产出消费速率/堆积曲线
@@ -438,7 +445,10 @@ curl -f http://localhost:8000/healthz
 
 ## 7. 修订记录
 
-- **v2（本次）**：与 #73/#74/#75 后的系统现状对齐——队列专线（q_analysis/q_report/q_index 三进程）；
+- **v3（本次）**：容量目标与 SLO（§1.0）；开放模型生成器与协调遗漏双轨延迟（§3.6）；
+  拐点必须可被服务端资源解释，四态结论（§3.5）；`ladder` / `compare` 落地（§3.1 口径校验与自校验）；
+  端点聚合排除 warmup 与 locust 自算行
+- **v2**：与 #73/#74/#75 后的系统现状对齐——队列专线（q_analysis/q_report/q_index 三进程）；
   id 池改分层抽样（修"热集代替全表"的系统性高估）；成功判定不再只看 5xx；
   队列回落提升为达标项；观测命令修正（`q_graph` 废弃）；新增 STRESS-05~08；
   新增 `run_stress.py` 单一入口与归档自描述要求；补 `analysis_spans` 写入放大观测；
