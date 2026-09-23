@@ -66,7 +66,8 @@ async def _finish_or_retry(ctx, *, task_type: str, business_id: str,
         message=message or f"{task_type} failed")
     print(f"[worker] {task_type} {business_id} dead-lettered "
           f"after {attempt} attempt(s): {error_code}")
-    key = "judgment_id" if task_type == "analysis" else "report_id"
+    key = {"analysis": "judgment_id", "report": "report_id"}.get(
+        task_type, "revision_id")
     return {key: business_id, "status": "failed", "error_code": error_code}
 
 
@@ -120,6 +121,33 @@ async def run_report(ctx, report_id: str) -> dict:
     return {"report_id": report_id, "status": status}
 
 
+async def run_index(ctx, revision_id: str | int) -> dict:
+    """模式索引重算壳层（issue #75）：失败留痕 + 退避重试 + 死信。"""
+    from backend.services.pattern_lifecycle import run_index as _run
+
+    attempt = int((ctx or {}).get("job_try", 1) or 1)
+    try:
+        status = await asyncio.to_thread(_run, int(revision_id))
+        print(f"[worker] index revision {revision_id} -> {status} "
+              f"(attempt {attempt})")
+    except Exception as exc:  # noqa: BLE001 — 壳层兜底：分类后重试或死信
+        code = getattr(exc, "code", None) or type(exc).__name__
+        print(f"[worker] index revision {revision_id} raised "
+              f"{type(exc).__name__}: {exc}")
+        return await _finish_or_retry(
+            ctx, task_type="pattern_index", business_id=str(revision_id),
+            queue=index_queue_name(), attempt=attempt,
+            error_code=str(code), message=repr(exc))
+    if status == "failed":
+        error_code, message = await asyncio.to_thread(
+            business_failure_sync, "pattern_index", str(revision_id))
+        return await _finish_or_retry(
+            ctx, task_type="pattern_index", business_id=str(revision_id),
+            queue=index_queue_name(), attempt=attempt,
+            error_code=error_code, message=message)
+    return {"revision_id": int(revision_id), "status": status}
+
+
 def analysis_queue_name() -> str:
     from backend.services.task_queue import analysis_queue_name as _name
 
@@ -128,6 +156,12 @@ def analysis_queue_name() -> str:
 
 def report_queue_name() -> str:
     from backend.services.task_queue import report_queue_name as _name
+
+    return _name()
+
+
+def index_queue_name() -> str:
+    from backend.services.task_queue import index_queue_name as _name
 
     return _name()
 
@@ -158,6 +192,21 @@ def collect_stuck(session) -> tuple[list[str], list[str]]:
     return list(queued_ids), list(report_ids)
 
 
+def collect_stuck_revisions(session) -> list[int]:
+    """待索引的 draft revision（worker 重启恢复用，issue #75）。
+
+    与 collect_stuck 分开：既有调用方按二元组解包，扩列会静默改变契约。
+    """
+    from sqlalchemy import select
+
+    from backend.models.knowledge import PatternRevision
+
+    return list(session.execute(
+        select(PatternRevision.id)
+        .where(PatternRevision.index_status == "pending",
+               PatternRevision.status == "draft")).scalars().all())
+
+
 async def recover_stuck_tasks(ctx) -> None:
     """worker 启动钩子：把 DB 里丢失投递的任务重新 enqueue。
 
@@ -173,6 +222,7 @@ async def recover_stuck_tasks(ctx) -> None:
     engine = get_db_engine()
     with Session(engine) as session:
         queued_ids, report_ids = collect_stuck(session)
+        revision_ids = collect_stuck_revisions(session)
     # ...enqueue 后统一释放连接池
     close_db_engine()
     redis = ctx.get("redis")
@@ -190,6 +240,11 @@ async def recover_stuck_tasks(ctx) -> None:
         await redis.enqueue_job("run_report", rid,
                                 _job_id=f"run_report:{rid}",
                                 _queue_name=report_queue_name())
+    for rev_id in revision_ids:
+        print(f"[worker] recover: re-enqueue index revision {rev_id}")
+        await redis.enqueue_job("run_index", rev_id,
+                                _job_id=f"run_index:{rev_id}",
+                                _queue_name=index_queue_name())
     close_db_engine()
 
 
@@ -217,6 +272,20 @@ class ReportWorkerSettings:
     # 报告渲染是 CPU 密集（PDF 生成），默认单并发避免拖慢分析 worker
     max_jobs = int(os.environ.get("ARQ_REPORT_MAX_JOBS", "1"))
     job_timeout = int(os.environ.get("ARQ_REPORT_JOB_TIMEOUT", "600"))
+
+
+class IndexWorkerSettings:
+    """模式索引重算 worker（issue #75）。
+
+    索引重算要调 embedding（网络）与 graphormer 前向（CPU/GPU），与交互式
+    分析竞争资源会直接拖慢用户可见延迟，因此独立进程 + 独立队列。
+    """
+    functions: ClassVar[list] = [run_index]
+    redis_settings = get_redis_settings()
+    queue_name = os.environ.get("ARQ_QUEUE_INDEX", "q_index")
+    on_startup = recover_stuck_tasks
+    max_jobs = int(os.environ.get("ARQ_INDEX_MAX_JOBS", "2"))
+    job_timeout = int(os.environ.get("ARQ_INDEX_JOB_TIMEOUT", "900"))
 
 
 # 兼容旧入口：arq workers.worker.WorkerSettings 与既有 compose/测试引用

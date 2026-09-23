@@ -89,5 +89,17 @@ services:
       - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       - REPORTS_DIR=/app/output/reports
 
+  # issue #75：索引重算 worker 同样隔离到 e2e 库/Redis DB1，
+  # 否则会连上开发库并污染真实模式数据
+  worker-index:
+    ports: []
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/pt_e2e
+      - REDIS_URL=redis://redis:6379/1
+      - ARQ_QUEUE_INDEX=q_index
+      - ARQ_INDEX_MAX_JOBS=1
+      - JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      - EMBEDDING_PROVIDER=stub
+
   frontend:
     ports: !override ["13000:3000"]

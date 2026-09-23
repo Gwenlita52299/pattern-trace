@@ -85,6 +85,19 @@ def business_failure_sync(task_type: str, business_id: str) -> tuple[
     engine = get_db_engine()
     try:
         with Session(engine) as session:
+            if task_type == "pattern_index":
+                # issue #75：索引失败码由 revision 行承载（embedding 故障等）
+                from backend.models.knowledge import PatternRevision
+
+                try:
+                    rev = session.get(PatternRevision, int(business_id))
+                except (TypeError, ValueError):
+                    rev = None
+                if rev is None:
+                    return None, "revision not found"
+                code = ("PATTERN_INDEX_FAILED"
+                        if rev.index_status == "failed" else None)
+                return code, (rev.index_error or "")
             model = Judgment if task_type == "analysis" else Report
             row = session.get(model, business_id)
             if row is None:
@@ -225,12 +238,14 @@ async def collect_queue_status(session) -> dict:
     """
     from backend.models.base import Judgment, Report, TaskDeadLetter
     from backend.services.task_queue import (analysis_queue_name,
+                                             index_queue_name,
                                              report_queue_name)
 
     now = datetime.now(UTC)
     out: dict = {"redis_available": True, "queues": {}}
     for label, queue in (("analysis", analysis_queue_name()),
-                         ("report", report_queue_name())):
+                         ("report", report_queue_name()),
+                         ("index", index_queue_name())):
         info = {"queue": queue, "pending": 0, "retry": 0,
                 "oldest_waiting_seconds": None}
         try:
@@ -259,6 +274,13 @@ async def collect_queue_status(session) -> dict:
         out["queues"][label]["active"] = int(session.execute(
             select(func.count(model.id))
             .where(model.status == "processing")).scalar_one())
+    # issue #75：索引重算的「进行中」以 PatternRevision 的 pending 计数表达
+    # （revision 行没有 processing 态，pending 即待重算/重算中）
+    from backend.models.knowledge import PatternRevision
+
+    out["queues"]["index"]["active"] = int(session.execute(
+        select(func.count(PatternRevision.id))
+        .where(PatternRevision.index_status == "pending")).scalar_one())
 
     total = int(session.execute(
         select(func.count(TaskDeadLetter.id))).scalar_one())

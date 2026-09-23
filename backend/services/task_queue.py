@@ -47,6 +47,12 @@ def report_queue_name() -> str:
     return _queue_from_env("ARQ_QUEUE_REPORT", "", "q_report")
 
 
+def index_queue_name() -> str:
+    # issue #75：模式索引重算独立队列——embedding 网络调用 + graphormer
+    # 前向会长时间占用槽位，不得挤占交互式分析或报告渲染
+    return _queue_from_env("ARQ_QUEUE_INDEX", "", "q_index")
+
+
 def queue_name() -> str:
     """（兼容保留）默认队列名 = 分析队列。"""
     return analysis_queue_name()
@@ -218,4 +224,45 @@ async def dispatch_report(report_id: str, *, attempt: int = 1) -> bool:
         return True
 
     _spawn(_run_inprocess_report(report_id))
+    return False
+
+
+async def _run_inprocess_index(revision_id: int) -> None:
+    """降级路径：进程内完成模式索引重算与死信归档（issue #75）。"""
+    from .pattern_lifecycle import run_index
+    from .task_governance import (archive_failure_sync, business_failure_sync,
+                                  is_transient)
+
+    from backend.core.config import get_settings
+
+    max_tries = int(getattr(get_settings(), "task_max_tries", 3))
+    attempt = 1
+    while True:
+        try:
+            # 索引重算含 embedding 网络调用与 graphormer 前向，隔离到线程
+            await asyncio.to_thread(run_index, revision_id)
+            return
+        except Exception as exc:  # noqa: BLE001 — 失败已由 run_index 留痕
+            error_code, message = await asyncio.to_thread(
+                business_failure_sync, "pattern_index", str(revision_id))
+            if is_transient(error_code) and attempt < max_tries:
+                await asyncio.sleep(_retry_delay(attempt))
+                attempt += 1
+                continue
+            await asyncio.to_thread(
+                archive_failure_sync, task_type="pattern_index",
+                business_id=str(revision_id), queue=index_queue_name(),
+                attempts=attempt, error_code=error_code or "PATTERN_INDEX_FAILED",
+                message=message or repr(exc))
+            return
+
+
+async def dispatch_index(revision_id: int, *, attempt: int = 1) -> bool:
+    """投递模式索引重算任务；返回 True 表示已进持久化队列。"""
+    if await _enqueue("run_index", revision_id,
+                      job_id=_job_id("run_index", str(revision_id), attempt),
+                      queue=index_queue_name()):
+        return True
+
+    _spawn(_run_inprocess_index(revision_id))
     return False

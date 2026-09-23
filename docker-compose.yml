@@ -172,6 +172,44 @@ services:
       timeout: 5s
       retries: 5
 
+  # issue #75：模式索引重算专用 worker（队列 q_index）。索引要调 embedding
+  # （网络）与 graphormer 前向（CPU/GPU），与交互式分析争资源会直接抬高
+  # 用户可见延迟，因此独立进程；环境变量与 worker 保持一致（同一套
+  # embedding 模型口径，否则库内向量与查询侧不在同一空间）。
+  worker-index:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://pt:pt@db:5432/patterntrace
+      - REDIS_URL=redis://redis:6379/0
+      - ARQ_QUEUE_INDEX=q_index
+      - ARQ_INDEX_MAX_JOBS=2
+      - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+      - GRAPH_DATA_MODE=${GRAPH_DATA_MODE:-fixture}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-stub}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-liquid/lfm-2.5-embedding-350m}
+      - EMBEDDING_DIM=${EMBEDDING_DIM:-1024}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTPS_PROXY:-}
+      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
+    volumes:
+      # 索引重算走 graphormer 在线前向（需要同权重模型/ego 语料）
+      - ./ingest/seed/graphormer_v2:/app/ingest/seed/graphormer_v2:ro
+    command: arq workers.worker.IndexWorkerSettings
+    healthcheck:
+      test: ["CMD-SHELL", "arq --check workers.worker.IndexWorkerSettings"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   frontend:
     build:
       context: ./frontend

@@ -80,10 +80,10 @@ build_service init || exit 1
 "${COMPOSE[@]}" run --rm init || {
   echo "init failed"; exit 1; }
 
-echo "== 3. 启动 backend/worker/worker-report/frontend =="
+echo "== 3. 启动 backend/worker/worker-report/worker-index/frontend =="
 "${COMPOSE[@]}" up -d db redis || exit 1
-for svc in backend worker worker-report frontend; do build_service "$svc" || exit 1; done
-"${COMPOSE[@]}" up -d backend worker worker-report frontend || exit 1
+for svc in backend worker worker-report worker-index frontend; do build_service "$svc" || exit 1; done
+"${COMPOSE[@]}" up -d backend worker worker-report worker-index frontend || exit 1
 
 echo "== 3b. 就绪检查（backend readyz + 前端同源代理）=="
 code=000
