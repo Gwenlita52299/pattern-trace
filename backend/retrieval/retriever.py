@@ -110,6 +110,8 @@ class PatternCandidate:
     # provenance=synthetic)只作结构检索参考，不会被解释为真实链上证据。
     source: str = "lazarus_confirmed"
     provenance: str = "confirmed"
+    # issue #75：判定当时使用的模式版本（落进 Judgment，供历史追溯）
+    revision: int = 1
     difference_note: str | None = None
 
 
@@ -369,7 +371,7 @@ class Retriever:
         self.session.execute(sql)
         sql = text("""
             SELECT id, name, source, provenance, description, evidence_grade,
-                   retrieval_fingerprint,
+                   revision, retrieval_fingerprint,
                    1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS graphormer_sim,
                    1 - (graphormer_embedding <=> CAST(:gv AS vector)) AS struct_sim,
                    CAST(0.0 AS double precision) AS sem_sim,
@@ -377,6 +379,7 @@ class Retriever:
             FROM patterns
             WHERE graphormer_embedding IS NOT NULL
               AND graphormer_model_id = :gmodel
+              AND status = 'active' AND index_status = 'indexed'
               AND id NOT IN :excluded
             ORDER BY graphormer_embedding <=> CAST(:gv AS vector)
             LIMIT :limit
@@ -405,12 +408,14 @@ class Retriever:
         """
         sql = text("""
             SELECT id, name, source, provenance, description, canonical_subgraph, evidence_grade,
+                   revision,
                    1 - (structural_features <=> CAST(:sv AS vector)) AS struct_sim,
                    1 - (semantic_embedding  <=> CAST(:ev AS vector)) AS sem_sim,
                    :w_struct * (structural_features <=> CAST(:sv AS vector))
                  + :w_semantic * (semantic_embedding  <=> CAST(:ev AS vector)) AS dist
             FROM patterns
             WHERE embedding_model = :model
+              AND status = 'active' AND index_status = 'indexed'
               AND id NOT IN :excluded
             ORDER BY dist
             LIMIT :limit
@@ -429,9 +434,12 @@ class Retriever:
                     exclude_ids: list[str], limit: int) -> list[dict]:
         """两路 ANN（各自 HNSW Top-N）+ RRF 融合 —— 规模化预留（RT-07 P2）。"""
         base = """
-            SELECT id, name, source, provenance, description, canonical_subgraph, evidence_grade
+            SELECT id, name, source, provenance, description,
+                   canonical_subgraph, evidence_grade, revision
             FROM patterns
-            WHERE embedding_model = :model AND id NOT IN :excluded
+            WHERE embedding_model = :model
+              AND status = 'active' AND index_status = 'indexed'
+              AND id NOT IN :excluded
             ORDER BY {col} <=> CAST(:vec AS vector)
             LIMIT :lim
         """
@@ -522,6 +530,7 @@ class Retriever:
                 evidence_grade=row.get("evidence_grade") or "A",
                 source=row.get("source") or "lazarus_confirmed",
                 provenance=row.get("provenance") or "confirmed",
+                revision=int(row.get("revision") or 1),
                 difference_note=generate_difference_note(query_canon, cand_canon),
             ))
         return RetrievalResult(candidates=candidates)

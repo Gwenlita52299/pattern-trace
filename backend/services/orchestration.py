@@ -472,6 +472,9 @@ async def _execute(session, row: Judgment, settings, started: float,
             risk_level=verdict.risk_level,
             matched_pattern_id=matched.pattern_id if matched else None,
             matched_pattern_name=matched.name if matched else None,
+            # issue #75：记录判定当时使用的模式版本——模式后续被编辑/回滚
+            # 时，历史判定仍能定位到当时的依据
+            matched_pattern_revision=matched.revision if matched else None,
             confidence=float(verdict.confidence),
             evidence=list(verdict.evidence),
             reasoning=verdict.reasoning,
