@@ -59,6 +59,32 @@ class AnalyzeRequest(BaseModel):
 
 # ---- 阶段5 请求 schema（必须在模块层：FastAPI 解析注解依赖模块 globals，
 #      闭包内定义的 BaseModel 会因 PEP 563 字符串注解无法求值）----
+class PatternEditRequest(BaseModel):
+    """模式编辑（issue #75）：必须携带基线 revision，过期即 409。"""
+    expected_revision: int = Field(ge=1)
+    name: str | None = Field(default=None, max_length=120)
+    description: str | None = None
+    evidence_grade: str | None = Field(default=None, pattern="^[ABS]$")
+    canonical_subgraph: dict | None = None
+    change_note: str | None = Field(default=None, max_length=500)
+
+
+class PatternReviewRequest(BaseModel):
+    revision: int = Field(ge=1)
+    approve: bool = True
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class PatternRevisionRefRequest(BaseModel):
+    expected_revision: int = Field(ge=1)
+
+
+class PatternRollbackRequest(BaseModel):
+    to_revision: int = Field(ge=1)
+    expected_revision: int = Field(ge=1)
+    change_note: str | None = Field(default=None, max_length=500)
+
+
 class CaseCreateRequest(BaseModel):
     title: str = Field(max_length=200)
     description: str = ""
@@ -417,6 +443,7 @@ def create_app() -> FastAPI:
         """SEC-03：写请求强制 X-Requested-With（服务端主动校验，非依赖前端自觉）；
         同时为业务写操作落审计日志（CM-10）。"""
         request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
         started = time.perf_counter()
 
         if request.method not in ("GET", "HEAD", "OPTIONS") \
@@ -954,6 +981,192 @@ def create_app() -> FastAPI:
             "displayed_node_count": len(nodes),
             "canonical_subgraph": {"nodes": nodes, "edges": edges},
         }
+
+    # ---- 模式知识库生命周期（issue #75：版本/审核/停用/回滚，仅 admin）----
+    def _audit_pattern(action: str, pattern_id: str, detail: dict) -> None:
+        """版本变更的业务审计（中间件只记方法/路径/状态码）。
+
+        验收要求「所有修改、审核、停用和回滚操作写入审计日志」——版本前后
+        的 revision/content_hash 等事实在这里留痕，供取证复盘。
+        """
+        request = _current_request.get()
+        if request is None:
+            return
+        _insert_audit(
+            action=action, resource_type="pattern", resource_id=pattern_id,
+            method=request.method, path=request.url.path,
+            status=200,
+            request_id=getattr(request.state, "request_id", "") or "-",
+            latency_ms=0,
+            ip=request.client.host if request.client else "-",
+            user_agent=request.headers.get("user-agent", ""),
+            user_id=_audit_user_id(request), detail=detail)
+
+    def _pattern_edit_patch(body: PatternEditRequest) -> dict:
+        payload = body.model_dump(exclude_none=True)
+        payload.pop("expected_revision", None)
+        payload.pop("change_note", None)
+        return payload
+
+    @app.get("/api/v1/patterns/{pattern_id}/revisions")
+    def list_pattern_revisions(pattern_id: str):
+        """版本历史（权限同 patterns 只读：公开）。不含大 JSONB 内容。"""
+        from ..services.pattern_lifecycle import list_revisions
+        from ..models.knowledge import Pattern
+
+        with Session(get_db_engine()) as session:
+            row = session.get(Pattern, pattern_id)
+            if row is None:
+                raise ProblemError(404, "Pattern not found", "NOT_FOUND")
+            items = list_revisions(session, pattern_id)
+            current = {"revision": row.revision, "status": row.status,
+                       "index_status": row.index_status,
+                       "reviewed_by": row.reviewed_by,
+                       "reviewed_at": (row.reviewed_at.isoformat()
+                                       if row.reviewed_at else None),
+                       "last_editor_id": row.last_editor_id}
+        return {"pattern_id": pattern_id, "current": current, "items": items}
+
+    @app.get("/api/v1/patterns/{pattern_id}/revisions/{revision}")
+    def get_pattern_revision(pattern_id: str, revision: int):
+        from ..services.pattern_lifecycle import get_revision
+
+        with Session(get_db_engine()) as session:
+            payload = get_revision(session, pattern_id, revision)
+        if payload is None:
+            raise ProblemError(404, "Revision not found", "NOT_FOUND")
+        return payload
+
+    @app.post("/api/v1/patterns/{pattern_id}/edit", status_code=201)
+    async def edit_pattern(
+        pattern_id: str,
+        body: PatternEditRequest,
+        admin: dict = Depends(require_role("admin")),
+    ):
+        """创建待审核版本（不改变当前生效版本，索引重算异步进行）。"""
+        from ..services.pattern_lifecycle import (PatternStateError,
+                                                  RevisionConflict,
+                                                  request_edit)
+        from ..services.task_queue import QueueUnavailable, dispatch_index
+
+        with Session(get_db_engine()) as session:
+            try:
+                revision = request_edit(
+                    session, pattern_id, expected_revision=body.expected_revision,
+                    patch=_pattern_edit_patch(body),
+                    actor_id=str(admin.get("id")),
+                    change_note=body.change_note)
+            except RevisionConflict as exc:
+                raise ProblemError(409, str(exc), "REVISION_CONFLICT") from exc
+            except PatternStateError as exc:
+                raise ProblemError(422, str(exc), "PATTERN_STATE_INVALID") from exc
+        if not revision:
+            raise ProblemError(404, "Pattern not found", "NOT_FOUND")
+        _audit_pattern("pattern.edit", pattern_id, {
+            "revision": revision["revision"],
+            "based_on": body.expected_revision,
+            "change_note": body.change_note,
+        })
+        try:
+            await dispatch_index(revision["id"])
+        except QueueUnavailable as exc:
+            raise ProblemError(503, str(exc), "QUEUE_UNAVAILABLE",
+                               headers={"Retry-After": "30"}) from exc
+        return revision
+
+    @app.post("/api/v1/patterns/{pattern_id}/review")
+    def review_pattern(
+        pattern_id: str,
+        body: PatternReviewRequest,
+        admin: dict = Depends(require_role("admin")),
+    ):
+        """审核：approve 把已索引的 draft 提升为生效版本；reject 驳回。"""
+        from ..services.pattern_lifecycle import (PatternStateError,
+                                                  approve_revision,
+                                                  reject_revision)
+
+        with Session(get_db_engine()) as session:
+            try:
+                if body.approve:
+                    result = approve_revision(
+                        session, pattern_id, revision=body.revision,
+                        actor_id=str(admin.get("id")))
+                else:
+                    result = reject_revision(
+                        session, pattern_id, revision=body.revision,
+                        actor_id=str(admin.get("id")), reason=body.reason)
+            except PatternStateError as exc:
+                raise ProblemError(422, str(exc), "PATTERN_STATE_INVALID") from exc
+            except Exception as exc:  # RevisionConflict 等
+                if getattr(exc, "code", "") == "REVISION_CONFLICT":
+                    raise ProblemError(409, str(exc), "REVISION_CONFLICT") from exc
+                raise
+        if not result:
+            raise ProblemError(404, "Pattern or revision not found", "NOT_FOUND")
+        _audit_pattern("pattern.review", pattern_id, {
+            "revision": body.revision,
+            "decision": "approved" if body.approve else "rejected",
+            "reason": body.reason,
+        })
+        return result
+
+    @app.post("/api/v1/patterns/{pattern_id}/deprecate")
+    def deprecate_pattern(
+        pattern_id: str,
+        body: PatternRevisionRefRequest,
+        admin: dict = Depends(require_role("admin")),
+    ):
+        """停用：当前版本退出召回（版本历史保持完整）。"""
+        from ..services.pattern_lifecycle import (RevisionConflict,
+                                                  deprecate)
+
+        with Session(get_db_engine()) as session:
+            try:
+                result = deprecate(session, pattern_id,
+                                   expected_revision=body.expected_revision,
+                                   actor_id=str(admin.get("id")))
+            except RevisionConflict as exc:
+                raise ProblemError(409, str(exc), "REVISION_CONFLICT") from exc
+        if not result:
+            raise ProblemError(404, "Pattern not found", "NOT_FOUND")
+        _audit_pattern("pattern.deprecate", pattern_id, {
+            "revision": result["revision"]})
+        return result
+
+    @app.post("/api/v1/patterns/{pattern_id}/rollback")
+    async def rollback_pattern(
+        pattern_id: str,
+        body: PatternRollbackRequest,
+        admin: dict = Depends(require_role("admin")),
+    ):
+        """回滚：历史版本成为新的当前版本（立即生效，历史链完整）。"""
+        from ..services.pattern_lifecycle import RevisionConflict, rollback
+        from ..services.task_queue import QueueUnavailable, dispatch_index
+
+        with Session(get_db_engine()) as session:
+            try:
+                result = rollback(
+                    session, pattern_id, to_revision=body.to_revision,
+                    expected_revision=body.expected_revision,
+                    actor_id=str(admin.get("id")),
+                    change_note=body.change_note)
+            except RevisionConflict as exc:
+                raise ProblemError(409, str(exc), "REVISION_CONFLICT") from exc
+        if not result:
+            raise ProblemError(404, "Pattern or revision not found", "NOT_FOUND")
+        _audit_pattern("pattern.rollback", pattern_id, {
+            "to_revision": body.to_revision,
+            "new_revision": result["revision"],
+            "based_on": body.expected_revision,
+        })
+        if result.get("index_status") == "pending":
+            # embedding 模型已变，历史向量不可复用 → 重算后再审核发布
+            try:
+                await dispatch_index(result["id"])
+            except QueueUnavailable as exc:
+                raise ProblemError(503, str(exc), "QUEUE_UNAVAILABLE",
+                                   headers={"Retry-After": "30"}) from exc
+        return result
 
     # ---- 案件管理（阶段5 · 业务闭环）----
     def _load_owned_case(session, user: dict, case_id: str):
@@ -1522,6 +1735,12 @@ def _pattern_summary(p) -> dict:
         "node_count": stats.get("node_count"),
         "edge_count": stats.get("edge_count"),
         "embedding_model": p.embedding_model,
+        # issue #75：生命周期（当前生效版本）
+        "revision": p.revision,
+        "status": p.status,
+        "index_status": p.index_status,
+        "reviewed_by": p.reviewed_by,
+        "reviewed_at": p.reviewed_at.isoformat() if p.reviewed_at else None,
         "created_at": p.created_at.isoformat() if p.created_at else None,
     }
 
