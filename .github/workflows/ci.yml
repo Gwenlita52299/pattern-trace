@@ -128,3 +128,17 @@ jobs:
           DATABASE_URL: postgresql://pt:pt@localhost:5432/patterntrace
           JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
         run: uv run python tests/performance/perf_phase6.py PERF-01
+      # PERF-02 的达标前提是 ≥10k 行（spec §2.2）：此前没有灌数步骤，
+      # 该用例在 nightly 永远 [skip]——补上 seed 才真正跑起来。
+      - name: Seed stress volume (10k judgments for PERF-02)
+        env:
+          DATABASE_URL: postgresql://pt:pt@localhost:5432/patterntrace
+          JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        run: uv run python tests/performance/seed_volume.py
+      - name: PERF-02 query latency (万级 judgment)
+        env:
+          DATABASE_URL: postgresql://pt:pt@localhost:5432/patterntrace
+          JWT_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          LLM_PROVIDER: mock
+          GRAPH_DATA_MODE: fixture
+        run: uv run python tests/performance/perf_phase6.py PERF-02
