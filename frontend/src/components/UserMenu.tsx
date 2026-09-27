@@ -11,6 +11,8 @@ import { useAuthStore } from '@/store/auth';
 
 export default function UserMenu() {
   const email = useAuthStore((s) => s.email);
+  // 入口显隐用；真正的权限判定在后端 require_role("admin")
+  const role = useAuthStore((s) => s.role);
   const router = useRouter();
   const [loginOpen, setLoginOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -86,6 +88,15 @@ export default function UserMenu() {
             >
               我的案例
             </Link>
+            {role === 'admin' && (
+              <Link
+                href="/settings"
+                onClick={() => setMenuOpen(false)}
+                className="block rounded-md px-3 py-2 text-sm text-pt-ink hover:bg-pt-panel-2"
+              >
+                配置
+              </Link>
+            )}
             <button
               onClick={logout}
               className="block w-full rounded-md px-3 py-2 text-left text-sm text-pt-muted hover:bg-pt-panel-2 hover:text-pt-ink"
