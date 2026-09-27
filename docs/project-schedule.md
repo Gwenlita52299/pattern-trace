@@ -1,6 +1,6 @@
 # PatternTrace · 项目排期（顺序版）
 
-> 依据：`product-design.md` 6 周路线图 + `docs/test-cases/`（201 条用例、评审报告、追踪矩阵）
+> 依据：`docs/product-design.md` 6 周路线图 + `docs/test-cases/`（201 条用例、评审报告、追踪矩阵）
 > 原则：只定先后顺序，不绑定具体时间；每阶段以「完成标志」作为进入下一阶段的门禁。
 > 创建日期：2026-08-23
 
@@ -39,7 +39,7 @@
 
 **完成标志**
 - 输入地址返回受控子图
-- 终止条件统计与 bybit_rust 基线对齐
+- 终止条件统计与参考实现基线对齐
 
 **并行测试**：graph-builder-test-cases.md（GB-01 ~ GB-24）
 

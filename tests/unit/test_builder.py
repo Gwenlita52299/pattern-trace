@@ -1,6 +1,6 @@
 """GraphBuilder 单测 — 映射 docs/test-cases/graph-builder-test-cases.md GB-01~23。
 
-队列语义采用 bybit_rust 基线（btc_aml_forensics reference/python step3_sub2_bfs_loop）：
+队列语义采用参考实现基线（btc_aml_forensics reference/python step3_sub2_bfs_loop）：
 三队列的元素是 **UTXO 元组** (utxo_txid, output_index, owner)，每个扩展单元 = 一个 UTXO 的
 消费（spent_by 解析），与该 UTXO 的消费交易 / 其输出展开计入一个主状态计数器。
 统计字段名采用基线词表（unspent / out_of_range / early_stop_wasabi /
@@ -637,7 +637,7 @@ class TestPartialFailure:
 
 
 # ---------------------------------------------------------------------------
-# 基线对齐：bybit_rust step3_sub2 决策级联 + 计数词表核对
+# 基线对齐：参考实现 step3_sub2 决策级联 + 计数词表核对
 # ---------------------------------------------------------------------------
 class TestBaselineAlignment:
     """在封闭 UTXO 图上验证基线决策级联（逐单元计数）与词表对齐。

@@ -89,9 +89,10 @@ class Settings(BaseSettings):
     # refresh 等认证路径的 IP 维度限流
     auth_rate_per_min: int = 30
 
-    # ingest（阶段2）— bybit_rust 基线数据根目录（含 results/ 与 data/）
-    lazarus_data_dir: str = "/Users/gwenlita/Documents/bybit_rust/golden/python"
-    # 正样本子图数据源切换：golden = bybit_rust 基线 fixture（单文件
+    # ingest（阶段2）— 外部归因数据根目录（含 results/ 与 data/）。
+    # 公开仓库不含该数据集，建库前需用 LAZARUS_DATA_DIR 指向本地路径
+    lazarus_data_dir: str = ""
+    # 正样本子图数据源切换：golden = 参考实现基线 fixture（单文件
     # subgraph_*.parquet）；cluster_k7 = 真实聚类子图（相对 repo 根的
     # cluster_seed_dir 下按簇分目录，各含 nodes/edges/seeds parquet）；
     # graphormer_v2 = benchmark confirmed 候选闭包（9,346 条，

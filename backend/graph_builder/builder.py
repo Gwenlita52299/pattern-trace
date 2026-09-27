@@ -1,6 +1,6 @@
 """BFS 三队列 + 五类终止条件 — graph-builder-spec §2/§3。
 
-终止语义与 bybit_rust 基线（btc_aml_forensics code/src/step3/step3_sub2_bfs_loop.py
+终止语义与参考实现基线（btc_aml_forensics code/src/step3/step3_sub2_bfs_loop.py
 process_queue_batched）逐项对齐：每个扩展单元是一次 **UTXO 消费**（基线 QueueEntry =
 (txid, n, block_height, tx_index, address)），一个 UTXO 恰好计入一个主状态计数器：
     unspent / out_of_range / early_stop_wasabi / early_stop_crosschain /

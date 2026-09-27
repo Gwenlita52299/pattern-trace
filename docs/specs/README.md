@@ -1,7 +1,7 @@
 # PatternTrace · 模块 Spec 文档索引
 
 > 按仓库结构逐模块编写，grill-me 风格（职责边界 / 输入输出 / 验收标准 / 测试要点）
-> 设计报告：`../../PatternTrace_前后端分离设计报告.md`
+> 设计报告：`../PatternTrace_前后端分离设计报告.md`
 > **2026-08-22 评审修订**：三方（架构/前端/后端）评审后已修复全部 P0/P1 问题，详见 [spec-review-summary.md](spec-review-summary.md)
 
 | 模块 | Spec 文件 | 职责 |

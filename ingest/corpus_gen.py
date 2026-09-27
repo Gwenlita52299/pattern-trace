@@ -1,6 +1,6 @@
 """参数化 Lazarus playbook 语料生成器 — 补充 ingest-spec §2 的规模要求。
 
-背景：spec 预期「数千条正样本」，但本地 bybit_rust 只有 golden fixture
+背景：spec 预期「数千条正样本」，但本地参考实现只有 golden fixture
 （3 个 seed）。本模块从已确认场景的拓扑特征（CoinJoin 入口 → 分层 peel /
 扇出 → 跨链桥逃逸）派生结构变体，补足检索阶段需要的知识库规模。
 

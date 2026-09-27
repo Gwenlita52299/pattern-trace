@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PatternTrace 阶段1 门禁验证：graph-builder 核心能力
 #   完成标志1: 输入地址返回受控子图（实网 Esplora smoke）
-#   完成标志2: 终止条件统计与 bybit_rust 基线对齐（golden fixture 对齐测试）
+#   完成标志2: 终止条件统计与参考实现基线对齐（golden fixture 对齐测试）
 # 用法: bash infra/verify_phase1.sh   （网络不可用时 smoke 会失败，单测仍可独立验证）
 set -uo pipefail
 cd "$(dirname "$0")/.."

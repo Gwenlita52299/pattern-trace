@@ -7,7 +7,7 @@ source=lazarus_confirmed, evidence_grade=A。
 校验先于一切 DB 写入——损坏输入零写入（IG-16）。
 
 数据源切换（settings.lazarus_subgraph_source）：
-- golden：bybit_rust 基线单文件布局 results/step3_subgraph/subgraph_*.parquet
+- golden：参考实现基线单文件布局 results/step3_subgraph/subgraph_*.parquet
 - cluster_k7：真实聚类子图，cluster_seed_dir 下按簇分目录
   <C>/{nodes,edges}.parquet（seeds.parquet 与 first_layer==0 冗余，不单独读取）
 """

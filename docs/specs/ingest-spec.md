@@ -34,7 +34,7 @@ ingest/
 - **cluster_k7（默认，真实数据）**：`ingest/seed/patterns/cluster_k7/<C>/` 按簇分目录，
   各含 `nodes/edges/seeds.parquet`（seeds 与节点表 `first_layer==0` 冗余，不单独读取）；
   节点表无 `direct_related_to_lazarus` 列，由 Lazarus 标签表回填
-- **golden（基线 fixture）**：`/Users/gwenlita/Documents/bybit_rust/golden/python/results/step3_subgraph/`
+- **golden（基线 fixture）**：`<LAZARUS_DATA_DIR>/results/step3_subgraph/`
   单文件布局（subgraph_nodes.parquet / subgraph_edges.parquet）
 
 配套标签（§4）：`ingest/seed/lazarus_btc_stolen_addresses.csv` → addresses_meta

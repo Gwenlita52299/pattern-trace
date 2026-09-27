@@ -37,7 +37,7 @@ tests/
 - 快照语义正确性（新条目不参与本轮展开）
 - 扇出爆炸时规模裁剪生效
 - early_stop 正确识别 CoinJoin 和跨链交易
-- 与 bybit_rust Python 基线在同一测试集上结果一致
+- 与参考实现 Python 基线在同一测试集上结果一致
 
 ### test_llm_judge.py
 

@@ -1,14 +1,14 @@
 # Spec · services/graph-builder — BFS 子图构建模块
 
 > 模块路径：`pattern_trace/services/graph-builder/`
-> 参考实现：btc_aml_forensics (bybit_rust) `src/step3/step3_sub2_bfs_loop.rs`
+> 参考实现：btc_aml_forensics `src/step3/step3_sub2_bfs_loop.rs`
 > 数据源：Blockstream Esplora 公共 API
 > 语言：MVP Python（asyncio + aiohttp + numpy）；P1 可选 Rust PyO3 绑定
 
 > **实现状态（2026-08-25 校准）**：容错层已接线——live 模式走同步容错 provider
 > （重试退避 / 429 Retry-After / 熔断切备用端点 / Redis L2，与异步 EsploraClient
 > 共享熔断器与缓存键）；unspent 终止依据响应自带 vout spent 状态；out_of_range
-> 由编排层传入 seed_block_time 生效。BFS 三队列元素已与 bybit_rust 基线一致改为
+> 由编排层传入 seed_block_time 生效。BFS 三队列元素已与参考实现基线一致改为
 > **UTXO 元组**（见 §2）：每层的队列元素是 `(utxo_txid, output_index, owner)`，
 > 展开单元是一次 UTXO 消费（spent_by 解析），而非旧实现的「地址节点」。per-layer
 > 裁剪已修正为 spec 的「每层共享 N」而非「每队列条目 N」。
@@ -207,4 +207,4 @@ NodeState 字段：
 - [ ] 快照语义正确（本轮新条目不参与本轮展开）
 - [ ] 规模裁剪在扇出爆炸场景下生效
 - [ ] early_stop 正确识别 CoinJoin 和跨链交易
-- [ ] 与 bybit_rust Python 基线在同一测试数据集上结果一致
+- [ ] 与参考实现 Python 基线在同一测试数据集上结果一致

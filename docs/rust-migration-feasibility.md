@@ -2,7 +2,7 @@
 
 > 评估对象：graph-builder 模块（BFS 子图构建）
 > 对照场景：MVP 单地址分析（3 跳 / 90 天窗口 / 节点上限 200）+ 未来 P2 扩展（多地址批量 / 多链）
-> 参考实现：`btc_aml_forensics`（bybit_rust 项目，Rust + Python 双版本已有）
+> 参考实现：`btc_aml_forensics`（Rust + Python 双版本已有）
 > 日期：2026-08-22
 
 ## 1. 瓶颈分析：Python 在这个场景到底慢在哪？
@@ -72,7 +72,7 @@ for utxo in layer_queue:          # ~200 iterations
 | 判定 | 说明 |
 |---|---|
 | **不建议 MVP 阶段全面迁移到 Rust** | 瓶颈在网络 IO + LLM 推理，不在 BFS CPU；Python 开发速度优势远大于运行时劣势 |
-| **建议保留 Rust 作为 graph-builder 的可选加速路径（P1/P2）** | 已有 bybit_rust 参考，Schema 兼容，可在性能需求出现时快速切换 |
+| **建议保留 Rust 作为 graph-builder 的可选加速路径（P1/P2）** | 已有参考实现，Schema 兼容，可在性能需求出现时快速切换 |
 
 ### 3.2 分阶段方案
 
@@ -115,7 +115,7 @@ fn build_subgraph(
     esplora_cache: &PyDict,
     label_sets: &PyDict,
 ) -> PyResult<PyObject> {
-    // 复用 bybit_rust Step3 BFS 核心
+    // 复用参考实现 Step3 BFS 核心
     // 返回 Python dict（nodes, edges, stats）
 }
 ```

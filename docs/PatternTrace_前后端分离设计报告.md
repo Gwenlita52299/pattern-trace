@@ -7,7 +7,7 @@
 
 PatternTrace 是一个面向交易所与机构风控调查员的**链上洗钱模式检索与判断平台**。用户输入一个区块链地址，系统以该地址为根节点构建受控交易子图，与知识库中已证实的洗钱交易子图进行结构 + 语义混合检索，再由 LLM 输出带证据引用的四档风险判断（high / medium / low / no_match），并支持案件留存与报告导出。
 
-本报告基于 `pattern_trace/product-design.md` 设计定稿，结合 Chainalysis、TRM Labs、Elliptic、MistTrack 等竞品调研，给出完整的前后端分离工程设计与实施路线。
+本报告基于 `docs/product-design.md` 设计定稿，结合 Chainalysis、TRM Labs、Elliptic、MistTrack 等竞品调研，给出完整的前后端分离工程设计与实施路线。
 
 ### 核心结论
 
@@ -122,7 +122,7 @@ pattern_trace/
 │   ├── services/             # 判断编排、案件、报告
 │   └── core/                 # 配置、安全、审计日志
 ├── services/
-│   ├── graph-builder/        # BFS 拓展（参考 bybit_rust Step3）+ 规模裁剪
+│   ├── graph-builder/        # BFS 拓展（参考实现 Step3）+ 规模裁剪
 │   ├── retrieval/            # 指纹计算 + pgvector 混合检索 + WL 精排
 │   └── llm-judge/            # provider 抽象 + 结构化判断 + 引用校验
 ├── ingest/                   # Lazarus 数据切图、负样本、标签表、入库脚本
@@ -204,7 +204,7 @@ POST /api/v1/addresses/analyze
 
 ### 4.2 graph-builder 模块
 
-复用 `btc_aml_forensics`（bybit_rust）Step3 的 BFS 算法语义与特征 Schema。
+复用 `btc_aml_forensics` 参考实现的 Step3 BFS 算法语义与特征 Schema。
 
 **分层三队列 BFS**：
 - **队列元素 = UTXO 元组** `(utxo_txid, output_index, owner)`，与基线 `QueueEntry` 同构

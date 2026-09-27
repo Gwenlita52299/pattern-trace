@@ -3,7 +3,7 @@
 #   完成标志1: 知识库可查询（pgvector 余弦检索 + 完整 canonical/向量返回）
 #   完成标志2: 正负样本比例达标（IG-05，口径 = patterns.grade A vs negatives）
 # 覆盖: IG-01~15,17 中需要真实 PostgreSQL 的部分；纯逻辑单测见 tests/unit。
-# 前置: docker compose 的 db 服务可用（localhost:5432）；bybit_rust golden 数据在配置路径。
+# 前置: docker compose 的 db 服务可用（localhost:5432）；参考实现 golden 数据在配置路径。
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

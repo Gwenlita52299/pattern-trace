@@ -88,13 +88,13 @@ flowchart LR
 5. 子图指纹（graphlet / WL 特征，用于精排）。
 
 > 知识库正样本可直接复用 btc_aml_forensics 已产出的子图数据：
-> `/Users/gwenlita/Documents/bybit_rust/golden/python/results/step3_subgraph/`
+> `<LAZARUS_DATA_DIR>/results/step3_subgraph/`
 > （`subgraph_nodes.parquet`、`subgraph_edges.parquet`、`_edges_batches/*`），
 > 及 `results/step2_label/` 的标注输出，作为入库脚本的数据源。
 
 ## 6. 子图构建（BFS）设计（P0 工程决策）
 
-**参考实现**：`/Users/gwenlita/Documents/bybit_rust`（btc_aml_forensics，即简历中 Lazarus 取证项目本体）。
+**参考实现**：btc_aml_forensics（Lazarus 取证参考项目，私有代码库，不随本仓库分发）。
 
 - Rust 实现：`src/step3/step3_sub2_bfs_loop.rs`
 - Python 基线：`code/src/step3/step3_sub2_bfs_loop.py`
@@ -128,7 +128,7 @@ flowchart LR
 - spending tx 被运行时 `CrosschainDetector` 判定为跨链（OP_RETURN / pegout 协议）→ 同样 early-stop，并记录 `op_return_protocol`；判定完全来自 Esplora 交易字段，无 crosschain_tx_set / CSV 标签库（issue #5）；
 - 前置阶段需要构建：CoinJoin/混币交易集合（跨链集合不再需要，由运行时检测）。
 
-因此产品的标签表除了地址标签，还必须包含**交易级集合**：已知 CoinJoin/混币交易（跨链桥协议改由运行时 CrosschainDetector 判别）。这是与 bybit_rust 对齐的关键。
+因此产品的标签表除了地址标签，还必须包含**交易级集合**：已知 CoinJoin/混币交易（跨链桥协议改由运行时 CrosschainDetector 判别）。这是与参考实现对齐的关键。
 
 ### 6.4 去重与节点/边状态
 
@@ -136,7 +136,7 @@ flowchart LR
 - 节点状态（`NodeState`）：`first_layer`、`layer_span`、`total_received_btc`、`total_sent_btc`、`utxo_count`、`direct_related_to_lazarus`、`script_type`；
 - 边特征（复用 `model::Edge` Schema）：`time_delta`（块高差 + 交易索引差）、`total_num_inputs/outputs`、`tx_fee_ratio`、`fanout_ratio`、`dst_value_btc`、`tx_total_input/output_btc`、`value_ratio`、`is_stopped_expansion`、`is_remixer`、`is_crosschain`、`op_return_protocol`。
 
-这些节点/边特征就是后续结构指纹与检索特征向量的直接输入，Schema 与 bybit_rust 保持一致，可无缝复用其已产出子图。
+这些节点/边特征就是后续结构指纹与检索特征向量的直接输入，Schema 与参考实现保持一致，可无缝复用其已产出子图。
 
 ### 6.5 工程机制与 MVP 适配
 
@@ -221,7 +221,7 @@ laundering-pattern-intel/
 │   ├── services/             # 判断编排、案件、报告
 │   └── core/                 # 配置、安全、审计日志
 ├── services/
-│   ├── graph-builder/        # BFS 拓展（参考 bybit_rust Step3）+ 规模裁剪（P0）
+│   ├── graph-builder/        # BFS 拓展（参考实现 Step3）+ 规模裁剪（P0）
 │   ├── retrieval/            # 指纹计算 + pgvector 混合检索 + WL 精排
 │   └── llm-judge/            # provider 抽象 + 结构化判断 + 引用校验
 ├── ingest/                   # Lazarus 数据切图、负样本、标签表、入库脚本
@@ -269,7 +269,7 @@ laundering-pattern-intel/
 
 | 周 | 内容 | 验收 |
 |---|---|---|
-| W1 | monorepo 骨架、docker-compose、DB schema（Alembic）、JWT 认证、BFS 子图构建器（参考 bybit_rust 三队列 BFS + 规模裁剪） | 本地一键启动；输入地址返回受控子图，终止条件统计与 bybit_rust 对齐 |
+| W1 | monorepo 骨架、docker-compose、DB schema（Alembic）、JWT 认证、BFS 子图构建器（参考实现三队列 BFS + 规模裁剪） | 本地一键启动；输入地址返回受控子图，终止条件统计与参考实现对齐 |
 | W2 | ingest：Esplora 数据源、Lazarus 数据切图、负样本生成、标签表、pgvector 入库 | 知识库可查询，正负样本比例达标 |
 | W3 | retrieval 服务：结构指纹 + 混合检索 + WL 精排 | recall@10 基线跑通并记录 |
 | W4 | llm-judge：provider 抽象、JSON Schema、引用校验；前端图谱 + verdict 面板 | 端到端：地址 → 子图 → 判断 → 可视化 |
