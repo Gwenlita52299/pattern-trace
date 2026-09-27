@@ -25,12 +25,17 @@ class ProviderErrorCode(str, enum.Enum):
     TIMEOUT = "timeout"                  # 请求/连接超时
     RATE_LIMITED = "rate_limited"        # 429（含本地并发闸门快速失败）
     AUTH_FAILED = "auth_failed"          # 401/403
+    # 402 / 429+insufficient_quota：账户余额或配额耗尽。与 RATE_LIMITED 分开，
+    # 因为处置完全不同——限流是等一会儿重试，余额不足是要充值或换 key
+    QUOTA_EXCEEDED = "quota_exceeded"
     INVALID_RESPONSE = "invalid_response"  # 响应畸形/缺字段/请求被拒
     UNAVAILABLE = "unavailable"          # 5xx / 连接失败 / 上游不可达
     CONFIGURATION = "configuration"      # 缺 key、base_url 非法等本地配置问题
 
 
 # 只有这三类值得重试：配置错误重试一万次也不会变好，认证失败更是。
+# quota_exceeded 同样不重试——充值前重试只是把"余额不足"重复若干遍，
+# 徒增延迟与上游噪音。
 RETRYABLE_CODES = frozenset({
     ProviderErrorCode.TIMEOUT,
     ProviderErrorCode.RATE_LIMITED,
@@ -56,6 +61,27 @@ class ProviderError(RuntimeError):
                           if retryable is None else retryable)
         if cause is not None:
             self.__cause__ = cause
+
+
+_QUOTA_HINTS = (
+    "insufficient_quota",           # OpenAI 系：429 + error.code
+    "insufficient_user_quota",      # OrcaRouter 等网关：402 + error.code
+    "exceeded your current quota",
+    "out of credits",
+    "insufficient credit",
+)
+
+
+def _looks_like_quota(exc: BaseException) -> bool:
+    """429 里区分"限流"与"额度耗尽"：前者退避重试，后者重试无意义。
+
+    OpenAI 系用 429 + `insufficient_quota` 表达余额耗尽，与真正的限流同状态码，
+    但一个该退避重试、一个该去充值——只看状态码会把后者变成一轮无用的重试。
+    只读响应体里的错误码/固定短语，不做宽泛的关键词匹配。
+    """
+    resp = getattr(exc, "response", None)
+    text = (getattr(resp, "text", "") or "")[:2000].lower()
+    return any(h in text for h in _QUOTA_HINTS)
 
 
 def _status_of(exc: BaseException) -> int | None:
@@ -99,8 +125,13 @@ def classify(exc: BaseException, *, provider: str = "",
         status = _status_of(exc)
         if status in (401, 403):
             code = ProviderErrorCode.AUTH_FAILED
+        elif status == 402:
+            # Payment Required：上游账户余额/配额耗尽
+            code = ProviderErrorCode.QUOTA_EXCEEDED
         elif status == 429:
-            code = ProviderErrorCode.RATE_LIMITED
+            code = (ProviderErrorCode.QUOTA_EXCEEDED
+                    if _looks_like_quota(exc)
+                    else ProviderErrorCode.RATE_LIMITED)
         elif status is not None and 500 <= status < 600:
             code = ProviderErrorCode.UNAVAILABLE
         elif status is not None and 400 <= status < 500:
@@ -109,7 +140,11 @@ def classify(exc: BaseException, *, provider: str = "",
             code = ProviderErrorCode.INVALID_RESPONSE
         else:
             code = ProviderErrorCode.UNAVAILABLE
-        hint = " (检查 API Key 是否有效/过期)" if status == 401 else ""
+        hint = ""
+        if status == 401:
+            hint = " (检查 API Key 是否有效/过期)"
+        elif code is ProviderErrorCode.QUOTA_EXCEEDED:
+            hint = " (上游账户余额或配额不足：请充值或更换 API Key)"
         return _wrap(code, f"HTTP {status}{hint}: {exc}", status=status)
 
     if httpx is not None and isinstance(exc, httpx.HTTPError):

@@ -43,10 +43,12 @@ def _request() -> httpx.Request:
     return httpx.Request("POST", "https://fake/v1")
 
 
-def _status_error(status: int) -> httpx.HTTPStatusError:
-    return httpx.HTTPStatusError(f"HTTP {status}", request=_request(),
-                                 response=httpx.Response(status,
-                                                         request=_request()))
+def _status_error(status: int, body: str = "") -> httpx.HTTPStatusError:
+    return httpx.HTTPStatusError(
+        f"HTTP {status}", request=_request(),
+        response=httpx.Response(
+            status, request=_request(),
+            **({"content": body.encode()} if body else {})))
 
 
 # ---------------------------------------------------------------------------
@@ -60,12 +62,39 @@ class TestErrorClassification:
         (500, ProviderErrorCode.UNAVAILABLE),
         (503, ProviderErrorCode.UNAVAILABLE),
         (400, ProviderErrorCode.INVALID_RESPONSE),
+        # 402 Payment Required：余额/配额耗尽——与"请求被拒"区分开
+        (402, ProviderErrorCode.QUOTA_EXCEEDED),
     ])
     def test_http_status_maps_to_code(self, status, expected):
         err = classify(_status_error(status), provider="openai", model="m")
         assert err is not None and err.code is expected
         assert err.status == status
         assert err.provider == "openai"
+
+    def test_429_with_quota_body_is_not_rate_limited(self):
+        """OpenAI 系用 429+insufficient_quota 表达余额耗尽：该去充值，不该退避重试。"""
+        quota = classify(_status_error(429, (
+            '{"error":{"code":"insufficient_quota",'
+            '"type":"insufficient_quota","message":"You exceeded your current quota"}}')),
+            provider="openai", model="m")
+        assert quota.code is ProviderErrorCode.QUOTA_EXCEEDED
+        assert quota.retryable is False
+        assert "充值" in str(quota) or "配额" in str(quota)
+
+        # 真限流（无额度信号）仍按限流处理并可重试
+        limited = classify(_status_error(429, '{"error":{"message":"rate limit"}}'))
+        assert limited.code is ProviderErrorCode.RATE_LIMITED
+        assert limited.retryable is True
+
+    def test_orcarouter_out_of_credits_402(self):
+        """实测形态：OrcaRouter 余额耗尽返回 402 + insufficient_user_quota。"""
+        err = classify(_status_error(402, (
+            '{"error":{"message":"You\'re out of credits - this request needs '
+            '$0.000038.","type":"insufficient_quota",'
+            '"code":"insufficient_user_quota"}}')), provider="openai", model="m")
+        assert err.code is ProviderErrorCode.QUOTA_EXCEEDED
+        assert err.status == 402
+        assert err.retryable is False
 
     def test_timeout_variants(self):
         assert classify(TimeoutError("t")).code is ProviderErrorCode.TIMEOUT
@@ -83,6 +112,7 @@ class TestErrorClassification:
         assert classify(_status_error(500)).retryable is True
         assert classify(_status_error(401)).retryable is False
         assert classify(_status_error(400)).retryable is False
+        assert classify(_status_error(402)).retryable is False
 
     def test_programming_bug_not_masked(self):
         """代码缺陷不得被伪装成"上游不可用"（否则会无意义重试并掩盖 bug）。"""

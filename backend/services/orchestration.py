@@ -10,6 +10,8 @@
 - LLM_PROVIDER_TIMEOUT      provider 超时（退避重试后仍失败，REL-03）
 - LLM_PROVIDER_RATE_LIMITED provider 429（同上）
 - LLM_PROVIDER_AUTH_FAILED  provider 401/403（issue #76：此前与通用错误混为一谈）
+- LLM_PROVIDER_QUOTA_EXCEEDED provider 402/额度耗尽（此前混进 INVALID_RESPONSE，
+  看起来像响应畸形，实际是账户要充值）
 - LLM_PROVIDER_INVALID_RESPONSE provider 响应畸形（同上）
 - EMBEDDING_*               检索阶段 embedding provider 故障（issue #76）
 - ESPLORA_UNAVAILABLE       图数据源完全不可用（REL-05）
@@ -105,12 +107,14 @@ _LLM_ERROR_CODES = {
     ProviderErrorCode.TIMEOUT: "LLM_PROVIDER_TIMEOUT",
     ProviderErrorCode.RATE_LIMITED: "LLM_PROVIDER_RATE_LIMITED",
     ProviderErrorCode.AUTH_FAILED: "LLM_PROVIDER_AUTH_FAILED",
+    ProviderErrorCode.QUOTA_EXCEEDED: "LLM_PROVIDER_QUOTA_EXCEEDED",
     ProviderErrorCode.INVALID_RESPONSE: "LLM_PROVIDER_INVALID_RESPONSE",
 }
 _EMBEDDING_ERROR_CODES = {
     ProviderErrorCode.TIMEOUT: "EMBEDDING_TIMEOUT",
     ProviderErrorCode.RATE_LIMITED: "EMBEDDING_RATE_LIMITED",
     ProviderErrorCode.AUTH_FAILED: "EMBEDDING_AUTH_FAILED",
+    ProviderErrorCode.QUOTA_EXCEEDED: "EMBEDDING_QUOTA_EXCEEDED",
     ProviderErrorCode.INVALID_RESPONSE: "EMBEDDING_INVALID_RESPONSE",
 }
 
