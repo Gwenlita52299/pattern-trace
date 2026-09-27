@@ -157,27 +157,6 @@ open http://localhost:3000
 - 管理端 provider 密钥：Fernet 加密入库，接口永不回显明文，只回 `key_source` / `has_key`
 - 生产（`COOKIE_SECURE=true`）：Cookie 附 Secure + SameSite=None，支持分域部署
 
-## 演示
-
-30 秒演示流程（种子案例）见 [docs/demo-script.md](docs/demo-script.md)，含演示视频录制分镜与口播稿。
-
-## 文档索引
-
-| 文档 | 内容 |
-|---|---|
-| [docs/user-guide.md](docs/user-guide.md) | 使用说明：从启动到完整业务闭环、API 直调要点与故障排查 |
-| [docs/specs/](docs/specs/) | 各模块 spec（职责边界 / 输入输出 / 验收标准 / 测试要点）与评审修订记录 |
-| [docs/product-design.md](docs/product-design.md) | 产品设计：目标、知识库、检索与判断口径、路线图 |
-| [docs/PatternTrace_前后端分离设计报告.md](docs/PatternTrace_前后端分离设计报告.md) | 前后端分离工程设计与竞品调研 |
-| [docs/spec-comparison-report.md](docs/spec-comparison-report.md) | 端到端校验结果与 spec↔实现差异比对 |
-| [docs/demo-script.md](docs/demo-script.md) | 演示分镜与口播稿 |
-| [docs/qwen3-local-llm-feasibility.md](docs/qwen3-local-llm-feasibility.md) | 本地 LLM 选型依据 |
-| [docs/rust-migration-feasibility.md](docs/rust-migration-feasibility.md) | 图构建 Rust 化可行性评估 |
-
-## 明确不做（Roadmap · P2）
-
-实时告警、graph2vec、历史数据回灌、多链支持、移动端、WebGL 大图渲染。
-
 ## License
 
 [MIT](LICENSE)
