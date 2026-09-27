@@ -79,6 +79,7 @@ Query params 支持 `page`, `page_size`, `sort_by`, `order=asc|desc`。
 | GET judgments/subgraph/patterns | ✅ 只读 | ✅ | ✅ |
 | cases CRUD / reports | ❌ 401 | ✅ | ✅ |
 | users / audit-logs | ❌ 401 | ❌ 403 | ✅ |
+| provider-config（provider 自选） | ❌ 401 | ❌ 403 | ✅ |
 
 ## 3. API Endpoints
 
@@ -244,6 +245,34 @@ failed 时：
 - 首个 admin 通过环境变量 `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` 在首次启动时 seed
 - `GET /api/v1/audit-logs`：admin only，分页 + 时间范围筛选
 
+### Provider 配置（admin only）
+
+管理端「配置」页自选 provider，**保存后立即生效**（API 进程即刻；worker 进程
+≤5s，读侧 TTL 缓存）。
+
+- `GET /api/v1/admin/provider-config` — 当前生效配置 + 注册表清单（下拉数据源）。
+  响应**永不含密钥明文或密文**，只回 `key_source`（database|environment|
+  not_required|none）与 `has_key`
+- `PUT /api/v1/admin/provider-config` — body `{provider, model, base_url?,
+  api_key?, clear_api_key?}`。`api_key` 省略 = 保留既有密文；`clear_api_key`
+  与 `api_key` 互斥（同时给出 422）
+- `DELETE /api/v1/admin/provider-config` — 删除 DB 配置回落 env（避免单向门）
+
+语义与约束：
+
+- DB 配置存在即**整体覆盖** env 的 `llm_provider/model/base_url/api_key`——
+  不做逐字段合并（把 DB 的 provider 配上 env 的 key 会把 A 家密钥发给 B 家）；
+  `base_url` 留空 = 用该 provider 内置默认地址
+- 密钥用 Fernet 加密入库，钥匙来自 `SECRETS_KEY`（缺失时保存密钥返回
+  `SECRETS_KEY_MISSING`，env 方式不受影响）
+- 解密失败 / DB 不可达 → **整份回落 env**（fail-open，不带半个配置继续跑）
+- `mock` 在 `GRAPH_DATA_MODE=live` 下不可切换（`PROVIDER_NOT_SWITCHABLE`）：
+  否则等于重新打开 issue #78 刻意关闭的「按请求注入 LLM 故障」通道；
+  下拉里以 `switchable:false` 标出
+- 校验错误码：`PROVIDER_UNKNOWN` / `VALIDATION_ERROR`（空模型）/
+  `PROVIDER_KEY_REQUIRED`（需要密钥但面板与环境都没有）/ `SECRETS_KEY_MISSING`
+- 改动经审计中间件自动落 `audit_logs`（path=PATCH/PUT、user_id=操作人）
+
 ### Health checks
 
 - `GET /healthz` — 进程存活，200
@@ -260,9 +289,15 @@ failed 时：
 - cases (uuid pk, title, description, status enum open/investigating/closed, created_by fk users)
 - case_addresses (**PK (case_id, address)**, case_id fk ON DELETE CASCADE, address, judgment_id fk nullable ON DELETE SET NULL)
 - reports (uuid pk, case_id fk, format enum pdf/html, status enum processing/completed/failed, storage_key, created_at)
+- provider_configs (bigserial pk, kind unique — 本期只 'llm', provider, model, base_url, api_key_encrypted text, updated_by, created_at, updated_at)
+  - 每 kind 一行（admin 全局一份）；无行 = 完全按 env 运行
 - audit_logs (bigserial pk, user_id nullable, request_id uuid, http_method, http_path, response_status int, action, resource_type, resource_id, action_result enum success/failure, detail jsonb, latency_ms int, ip, user_agent, created_at)
 
 ## 5. 安全设计
+
+- **provider 密钥**：仅在服务端加密存储（Fernet/AES-CBC+HMAC，钥匙 `SECRETS_KEY`），
+  接口与日志均不回显明文或密文；`SECRETS_KEY` 缺失时不落库（宁可不提供该能力，
+  也不静默用默认钥匙）；运行时切换 provider 受 `GRAPH_DATA_MODE` 约束（live 下不可切 mock）
 
 - JWT：access 15min（内存持有）/ refresh 7d HTTPOnly Cookie + rotation + reuse detection
 - CSRF：SameSite cookie + `X-Requested-With` 自定义 header 校验

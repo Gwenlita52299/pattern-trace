@@ -21,8 +21,12 @@ MVP **桌面优先**；移动端仅保证只读浏览（画布禁拖拽、详情
 | `/cases` | `app/cases/page.tsx` | 案件列表表格（登录后可访问） |
 | `/cases/[id]` | `app/cases/[id]/page.tsx` | 案件详情 + 关联地址 + 报告导出按钮 |
 | `/login` | `app/login/page.tsx` | 登录表单 |
+| `/settings` | `app/settings/page.tsx` | 管理端「配置」：自选 provider + API 密钥 + 自定义地址/模型（admin only）；密钥只写不读，页面显示「已保存/沿用环境变量」状态而非密钥本身 |
 
-**路由保护**：`middleware.ts` 匹配 `/cases/:path*`，仅检查 access token 存在性（内存丢失则尝试一次 refresh）；验签由后端 401 兜底。`/analyze/*` 明确豁免（免登录演示）。
+**路由保护**：`/settings` 入口仅在 `authStore.role === "admin"` 时出现在用户菜单，
+页面内同样以 role 做入口显隐；**真正的权限判定始终在后端** `require_role("admin")`
+（403 由页面内联渲染为「仅管理员可配置 provider」）。
+`middleware.ts` 匹配 `/cases/:path*`，仅检查 access token 存在性（内存丢失则尝试一次 refresh）；验签由后端 401 兜底。`/analyze/*` 明确豁免（免登录演示）。
 
 ## 3. 认证方案（D4 定稿）
 
@@ -117,6 +121,9 @@ SWR 用于 `/patterns`、`/cases` 列表页：分页与筛选条件写入 URL se
 - **TypeScript 类型生成**：`openapi-typescript` 从 backend `/openapi.json` 生成 `types/api.d.ts` 并提交 git；CI 中 backend job 导出 schema artifact，frontend job 校验类型一致性
 
 ## 7. 验收标准
+
+- `/settings` 保存 provider 后无需重启即生效；密钥刷新后仍显示「已保存到面板」而不回显（FE 侧不持有明文）
+- `role` 在整页刷新后仍可用（后端 `/auth/refresh` 响应携带 `user.role`）；否则 admin 入口会随刷新消失
 
 - [ ] 输入地址 → 显示 loading → 展示图谱 + verdict；刷新 /analyze/[id] 不重新发起分析
 - [ ] judgment failed 时显示错误卡 + 重试按钮

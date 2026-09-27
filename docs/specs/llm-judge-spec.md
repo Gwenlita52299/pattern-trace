@@ -152,6 +152,8 @@ async def judge(subgraph, candidates, address) -> JudgmentResult:
 ## 9. 测试要点
 
 - [ ] Provider 切换正常工作（mock 三种 provider 返回相同结构）
+- [ ] 管理端配置优先于 env：`provider_configs` 有行时整体覆盖 `llm_*`，无行时 env 原样
+      （后端 API 见 backend-api-spec §3 Provider 配置；解密失败/DB 不可达时整份回落 env）
 - [ ] JSON 解析失败触发重试
 - [ ] evidence 引用越界被拦截且重试后修正
 - [ ] 缓存命中时不调用 LLM
