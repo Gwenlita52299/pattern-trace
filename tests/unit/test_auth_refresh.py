@@ -18,6 +18,23 @@ class TestRefreshEndpoint:
         assert "refresh_token" not in data
         assert "refresh_token" in client.cookies
 
+    def test_refresh_returns_role_for_admin_entry_visibility(self, client):
+        """硬刷新后前端要恢复 admin 入口显隐，refresh 必须带 user.role。
+
+        回归：此前 refresh 只回 email/access_token，整页刷新后 authStore.role
+        为 null，PatternLifecycle / 配置页等 admin 入口会凭空消失。
+        """
+        from backend.api.app import seed_user
+        seed_user("role-admin@test.com", "Passw0rd!123", role="admin")
+        client.post("/api/v1/auth/login",
+                    json={"email": "role-admin@test.com",
+                          "password": "Passw0rd!123"})
+        resp = client.post("/api/v1/auth/refresh")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("user", {}).get("role") == "admin"
+        assert data["email"] == "role-admin@test.com"
+
     def test_refresh_rotation(self, client):
         from backend.api.app import seed_user
         seed_user("r@test.com", "Passw0rd!123")

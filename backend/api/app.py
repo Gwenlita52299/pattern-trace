@@ -664,11 +664,16 @@ def create_app() -> FastAPI:
 
         # D4：轮换后的新 refresh token 同样只经 HttpOnly Cookie 下发
         # email：issue #43，前端刷新后凭它恢复导航栏用户中心展示态
+        # user.role：与登录返回体对齐——硬刷新后前端要据此恢复 admin 入口显隐
+        # （PatternLifecycle / 配置页只对 admin 展示），此前 refresh 不带 role，
+        # 刷新一次管理员操作入口就消失
         resp = JSONResponse(content={
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": access_ttl,
             "email": email,
+            "user": {"id": user.get("id"), "email": email,
+                     "role": user.get("role")},
         })
         resp.set_cookie(
             "refresh_token", new_refresh_token, max_age=refresh_ttl,
