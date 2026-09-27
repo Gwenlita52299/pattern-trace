@@ -117,7 +117,9 @@ bench_graph_builder.py：
 
 ## 7. 验收标准
 
-- [ ] `pytest tests/unit/` 全部通过且覆盖率 ≥ 80%
+- [ ] `bash infra/run_unit_tests.sh`（隔离库 `patterntrace_test`）全部通过且覆盖率 ≥ 80%
+  - 不可直接 `pytest tests/unit`：单测含全表清理，指向开发库会删掉真实分析记录
+  - 破坏性用例的库名守卫见 `scripts/db_guard.py`；CI 同样使用 `patterntrace_test`
 - [ ] `pytest tests/integration/` 通过（docker-compose 环境）
 - [ ] `npx playwright test` E2E 全部通过
 - [ ] `python tests/evaluation/eval_retrieval.py` 输出 recall@10 ≥ 80%

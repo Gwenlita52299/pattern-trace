@@ -306,12 +306,20 @@ def _poll(client, jid: str, auth: dict | None,
 
 
 def _clear_judgments() -> None:
+    """全表清理 judgments——**只允许在专用库（pt_e2e）上执行**。
+
+    README「E2E 环境隔离（必读）」用文字警告过这一点；现在由
+    scripts.db_guard 的库名守卫在代码里强制，避免文字警告被绕过。
+    """
     from sqlalchemy import delete
     from sqlalchemy.orm import Session
 
     from backend.api.app import get_db_engine
     from backend.core.config import get_settings
     from backend.models.base import Judgment
+    from scripts.db_guard import require_destructive_db
+
+    require_destructive_db("E2E 前置清理（DELETE FROM judgments）")
 
     with Session(get_db_engine()) as session:
         session.execute(delete(Judgment))

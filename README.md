@@ -116,16 +116,26 @@ bash infra/verify_e2e_local.sh   # 完整 E2E 门禁（issue #78）：一条命�
                                  # checkout 构建、初始化隔离 DB/KB、启动全部服务、
                                  # 跑通分析→判断→子图→PDF/HTML + 独立 worker 队列形态
 bash infra/verify_phase6.sh      # 阶段6 门禁：单元+E2E+契约+性能+部署配置
-uv run pytest tests/unit          # 单元 + 契约（CT-01~03）
+bash infra/run_unit_tests.sh      # 单元 + 契约（CT-01~03）——**用这个，别直接 pytest**
+bash infra/run_unit_tests.sh tests/unit/test_provider_config.py -q   # 也可只跑部分
 python -m scripts.gen_api_types   # OpenAPI schema 变更后同步前端契约
 uv run python tests/performance/perf_phase6.py PERF-01    # 报告容量基准
 ```
+
+**单测必须指向专用库（必读）**：单测里有 `DELETE FROM judgments` 这类全表清理，
+而 `DATABASE_URL` 默认就是开发库（与本地栈共用同一个 Postgres）——直接
+`uv run pytest tests/unit` 会清掉开发库里正在查看的分析记录，`/analyze/<id>`
+随即 404 且无法恢复。`bash infra/run_unit_tests.sh` 会自动建/刷新
+`patterntrace_test` 并指向它（只建 schema，不拷数据，与 CI 的空库路径一致）。
+`scripts/db_guard.py` 把这条约定变成机器可校验的：破坏性用例只允许库名为
+`patterntrace_test` / `pt_e2e` / `*_test`，指向别的库直接报错并给出操作指引。
 
 **E2E 环境隔离（必读）**：E2E 全部走独立 compose project（`-p pt-e2e`）、
 独立 DB（名 `pt_e2e`，seed 脚本拒绝向其他库名写入）、独立 Redis DB index
 （`/1`，判决缓存与开发环境隔离）与独立报告卷。`run_e2e_phase4.py` 的
 `_clear_judgments` 会**全表 DELETE judgments**——绝不可将 E2E 脚本指向
-开发或生产数据库；对既有数据库执行清理前必须核对 `DATABASE_URL`。
+开发或生产数据库；该约束现由 `scripts/db_guard.py` 在代码里强制
+（库名不是 `pt_e2e` / `*_test` 即报错），不再只靠这句提醒。
 fixture KB seed（`infra/seed_kb_fixture.py`）与判决缓存隔离保证
 KB 变更后 E2E 不会命中旧 verdict 假通过。
 

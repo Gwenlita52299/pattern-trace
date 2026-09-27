@@ -14,13 +14,17 @@ jobs:
   lint-test-backend:
     runs-on: ubuntu-latest
     services:
-      # 单测依赖真实 Postgres（BE-42/auth 等用例）；默认 DATABASE_URL 即指向此服务
+      # 单测依赖真实 Postgres（BE-42/auth 等用例）。
+      # 库名必须是 patterntrace_test：单测里有全表清理（DELETE FROM judgments），
+      # scripts/db_guard.py 按库名放行（patterntrace_test / pt_e2e / *_test），
+      # 指向开发库会直接报错而不是静默清空。CI 的库虽是临时的，同名约定保证
+      # 本地与 CI 行为一致。
       db:
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: pt
           POSTGRES_PASSWORD: pt
-          POSTGRES_DB: patterntrace
+          POSTGRES_DB: patterntrace_test
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U pt" --health-interval 3s
@@ -33,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Migrate database
-        run: DATABASE_URL=postgresql://pt:pt@localhost:5432/patterntrace JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef uv run alembic upgrade head
+        run: DATABASE_URL=postgresql://pt:pt@localhost:5432/patterntrace_test JWT_SECRET=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef uv run alembic upgrade head
       - name: Lint
         run: uv run ruff check backend/
       - name: OpenAPI codegen (CT-01)
@@ -43,6 +47,8 @@ jobs:
             tests/unit/__snapshots__/openapi.json \
             || { echo "::error::OpenAPI drift — run 'python -m scripts.gen_api_types' and commit"; exit 1; }
       - name: Unit tests (含契约测试 CT-01~03)
+        env:
+          DATABASE_URL: postgresql://pt:pt@localhost:5432/patterntrace_test
         run: uv run pytest tests/unit --cov=backend --cov-report=term-missing
       - name: Alembic offline SQL check
         run: |

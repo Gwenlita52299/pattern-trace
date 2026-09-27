@@ -91,8 +91,17 @@ def _poll_terminal(client, jid, timeout_s=15.0) -> dict:
 
 
 def _clear_judgments() -> None:
+    """全表清理 judgments——**只允许在专用测试库上执行**。
+
+    这里曾是无条件 delete(Judgment)：单测与开发库共用同一个 Postgres，
+    跑一次全量单测就会删掉正在查看的分析记录（页面随即 404）。
+    scripts/db_guard 的库名守卫把这条约定变成机器可校验的。
+    """
     from backend.core.config import get_settings
     from backend.models.base import Judgment
+    from scripts.db_guard import require_destructive_db
+
+    require_destructive_db("测试前置清理（DELETE FROM judgments）")
 
     with Session(get_db_engine()) as session:
         session.execute(delete(Judgment))
