@@ -290,3 +290,26 @@ class Judgment(Base):
     created_by = Column(String(36), ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ProviderConfig(Base):
+    """管理端可配置的 provider（前端「配置」页）。
+
+    每个 kind 只有一行（admin 全局一份）；kind 预留 embedding，本期只写 llm。
+    provider/model/base_url 一旦存在即**整体覆盖** env 同名配置——这样切换
+    provider 时不会把上一个 provider 的 base_url 带过去（env 的 base_url 也是
+    provider 专属的）。api_key 只存密文，接口永不回显明文。
+    """
+
+    __tablename__ = "provider_configs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    kind = Column(String(20), nullable=False, unique=True)  # llm（预留 embedding）
+    provider = Column(String(50), nullable=False)
+    model = Column(String(200), nullable=False)
+    base_url = Column(String(500))          # 空 = 用该 provider 的默认地址
+    api_key_encrypted = Column(Text)         # Fernet 密文；NULL = 不覆盖 env 密钥
+    updated_by = Column(String(36))          # 操作人（审计留痕，不建 FK）
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(),
+                        onupdate=func.now())

@@ -79,6 +79,8 @@ services:
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+      # 管理端保存 provider API Key 的加密钥匙（可选；缺失时面板不能存密钥）
+      - SECRETS_KEY=${SECRETS_KEY:-}
       - BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL:-}
       - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-}
       # issue #22：显式指向共享卷挂载点，不依赖 WORKDIR 相对路径的隐式巧合
@@ -132,6 +134,8 @@ services:
       - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - JWT_SECRET=${JWT_SECRET:?set-in-.env}
+      # worker 需要在任务执行时解出管理端配置的 provider 密钥
+      - SECRETS_KEY=${SECRETS_KEY:-}
       - REPORTS_DIR=/app/output/reports
     volumes:
       - report_files:/app/output/reports

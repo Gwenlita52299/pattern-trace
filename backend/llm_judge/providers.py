@@ -514,9 +514,11 @@ def get_llm_client(settings=None) -> LLMClient:
     是否包装），真实 provider 一律套统一包装层。
     """
     if settings is None:
-        from backend.core.config import get_settings
+        # 管理端配置优先于 env（DB 有行则 llm_* 整份覆盖）；无行即 env 原样。
+        # 延迟导入：让 LLM 层不无条件拖上 ORM/DB 模块
+        from backend.services.provider_config import effective_llm_settings
 
-        settings = get_settings()
+        settings = effective_llm_settings()
     provider = settings.llm_provider
     spec = REGISTRY.get("llm", provider)
     inner = spec.factory(settings=settings)

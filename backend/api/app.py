@@ -100,6 +100,27 @@ class CaseAddressesRequest(BaseModel):
     addresses: list[str] = Field(min_length=1, max_length=50)
 
 
+class ProviderConfigRequest(BaseModel):
+    """管理端 provider 配置（前端「配置」页）。
+
+    api_key 省略 = 保留既有密文；clear_api_key = 显式清掉已存密钥。
+    两者同时给出以 clear_api_key 为准会产生歧义，故校验拒绝。
+    """
+
+    provider: str = Field(max_length=50)
+    model: str = Field(max_length=200)
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=400)
+    clear_api_key: bool = False
+
+    @field_validator("clear_api_key")
+    @classmethod
+    def _no_ambiguous_key_intent(cls, v: bool, info) -> bool:
+        if v and info.data.get("api_key"):
+            raise ValueError("api_key and clear_api_key are mutually exclusive")
+        return v
+
+
 class UserCreateRequest(BaseModel):
     email: str = Field(max_length=255)
     password: str
@@ -1470,6 +1491,40 @@ def create_app() -> FastAPI:
             "providers": [h.to_dict() for h in results],
             "ok": all(h.status == "ok" for h in results),
         }
+
+    # ---- 管理端 provider 配置（前端「配置」页自选 provider）----
+    @app.get("/api/v1/admin/provider-config")
+    def get_provider_config(admin: dict = Depends(require_role("admin"))):
+        """当前生效的 provider 配置 + 注册表清单（供下拉）。
+
+        响应**永不含密钥明文**，只回 key_source / has_key：面板要靠这一点
+        做到"刷新后显示已配置，而不是把密钥重新打在屏幕上"。
+        """
+        from ..services.provider_config import describe
+
+        return describe()
+
+    @app.put("/api/v1/admin/provider-config")
+    def put_provider_config(
+            body: ProviderConfigRequest,
+            admin: dict = Depends(require_role("admin"))):
+        """保存配置：写库后**立即**（本进程）/ ≤5s（worker 进程）生效。"""
+        from ..services.provider_config import ProviderConfigError, update
+
+        try:
+            return update(
+                body.provider, body.model, base_url=body.base_url,
+                api_key=body.api_key, clear_api_key=body.clear_api_key,
+                actor_id=str(admin.get("email") or admin.get("id")))
+        except ProviderConfigError as exc:
+            raise ProblemError(exc.status, exc.message, exc.code) from exc
+
+    @app.delete("/api/v1/admin/provider-config")
+    def delete_provider_config(admin: dict = Depends(require_role("admin"))):
+        """删除 DB 配置回落到 env——没有这条路径，面板就是单向门。"""
+        from ..services.provider_config import reset
+
+        return reset()
 
     @app.get("/api/v1/admin/queues")
     async def queue_status_endpoint(

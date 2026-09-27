@@ -37,6 +37,12 @@ class Settings(BaseSettings):
                 "JWT_SECRET has insufficient entropy (fewer than 10 "
                 "distinct characters); use a random secret")
         return v
+    # 管理端可配置 provider（issue：前端自选 provider）的密钥加密钥匙。
+    # 可选：缺失时只是「不能在面板里保存 API Key」（env 方式照常工作），
+    # 而不是拒绝启动——存量部署不该因为新增可选能力而起不来。
+    # Fernet 钥匙格式：44 字符 urlsafe-base64（openssl rand -base64 32）。
+    secrets_key: str = ""
+
     access_token_expire_minutes: int = 15
     refresh_token_days: int = 7
     # issue #63：生产默认 deepseek（fail-fast：无 LLM_API_KEY 首次调用即明确报错）；

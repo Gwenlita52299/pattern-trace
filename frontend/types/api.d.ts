@@ -12,6 +12,7 @@ export const API_ROUTES: readonly ApiRoute[] = [
   { path: '/api/v1/admin/dead-letters', methods: ["GET"] },
   { path: '/api/v1/admin/dead-letters/{dead_letter_id}/requeue', methods: ["POST"] },
   { path: '/api/v1/admin/judgments/{judgment_id}/cancel', methods: ["POST"] },
+  { path: '/api/v1/admin/provider-config', methods: ["DELETE", "GET", "PUT"] },
   { path: '/api/v1/admin/providers/health', methods: ["GET"] },
   { path: '/api/v1/admin/queues', methods: ["GET"] },
   { path: '/api/v1/admin/reports/{report_id}/cancel', methods: ["POST"] },

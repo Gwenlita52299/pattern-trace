@@ -23,6 +23,7 @@ dependencies = [
     "fpdf2>=2.7",
     # graphormer 检索向量（查询侧 ego 池化 + 标量 z 分数）
     "numpy>=2.0",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

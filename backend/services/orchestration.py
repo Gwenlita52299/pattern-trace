@@ -42,6 +42,7 @@ from ..llm_judge.judge import (
     canonical_subgraph_hash,
 )
 from ..llm_judge.providers import get_llm_client
+from .provider_config import effective_llm_settings
 from ..models.base import (
     TERMINAL_STATUSES,
     CaseAddress,
@@ -191,7 +192,9 @@ async def run_analysis(judgment_id: str, session=None, *,
             from sqlalchemy.orm import Session
 
             session = Session(engine)
-        settings = get_settings()
+        # 管理端配置（前端「配置」页）优先于 env：DB 有行则 llm_* 整份覆盖。
+        # 只覆盖 llm_* 四项，其余（检索/图/队列参数）仍是 env 语义。
+        settings = effective_llm_settings()
         row = session.get(Judgment, judgment_id)
         if row is None:
             return "skipped"
